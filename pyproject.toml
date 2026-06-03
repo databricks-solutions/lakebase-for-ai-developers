@@ -1,0 +1,57 @@
+[project]
+name = "supply-chain-planner"
+version = "0.1.0"
+description = "Multi-agent supply-chain planner copilot — LangGraph on Databricks Apps, Lakebase state, MLflow tracing"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# Phase-0 environment contract. Deps mirror the reference template's pinned set
+# (https://github.com/databricks/app-templates/blob/main/agent-langgraph-advanced/pyproject.toml)
+# plus the data/pgvector deps WS2 needs for the spike. NOTE: no [project.scripts] entrypoints
+# yet — those (start-app, start-server, quickstart) point at agent_server/ + scripts/ modules
+# that WS1 will bring over from the template. Add them then.
+dependencies = [
+    # --- App / server (from the template) ---
+    "fastapi>=0.129.0",
+    "uvicorn>=0.41.0",
+    "python-dotenv>=1.2.1",
+    # --- Agent / LangGraph + Databricks (from the template) ---
+    "databricks-langchain[memory]>=0.19.0",
+    "databricks-ai-bridge[agent-server]>=0.19.0",
+    "databricks-sdk>=0.79.0",
+    "databricks-agents>=1.9.3",
+    "mlflow>=3.10.1",
+    "langgraph>=1.1.0",
+    "langchain-mcp-adapters>=0.2.1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    # --- Lakebase / pgvector (WS2) ---
+    "psycopg[binary,pool]>=3.2.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "pgvector>=0.3.0",
+    # --- Synthetic data gen (WS2/WS4) ---
+    "dbldatagen>=0.4.0",
+    "faker>=30.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.6.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+# Scaffold has no Python package yet (no supply_chain_planner/ dir), so don't try to build the
+# project itself — `uv sync` just installs dependencies into the env. When WS1 brings the
+# template's agent_server/ + scripts/ code, remove this line (or set true), restore a
+# [build-system] (hatchling) + [project.scripts] + [tool.hatch.build.targets.wheel] packages.
+package = false
+
+# Once agent_server/ + scripts/ land (WS1, from the template), add:
+# [project.scripts]
+# quickstart    = "scripts.quickstart:main"
+# start-app     = "scripts.start_app:main"
+# start-server  = "agent_server.start_server:main"
+# agent-evaluate = "agent_server.evaluate_agent:evaluate"
+# discover-tools = "scripts.discover_tools:main"
