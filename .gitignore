@@ -157,6 +157,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# uv lockfile — not tracked (secret-scanner false-positives on package hashes;
+# regenerate locally with `uv sync`). pyproject.toml pins version floors.
+uv.lock
+
 # Spyder project settings
 .spyderproject
 .spyproject
