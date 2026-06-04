@@ -9,9 +9,12 @@ The demo proves Lakebase's value to the **technical GenAI/ML persona** (memory s
 latency, scalability, I/O) and lands a defensible opinion on **Lakebase pgvector vs Mosaic AI
 Vector Search**.
 
-> **Status: scaffold.** This repo currently holds shared context, skills, and references so the
-> workstreams can begin building. Agent code, I/O contracts, and a runnable app are the first
-> sprint tasks (see the sprint plan).
+> **Status: first slice landed (WS3 + WS5).** The LangGraph supervisor, three gather-agent
+> tool wrappers (Knowledge / Analytics / Operational), the Pydantic I/O contracts, and the
+> data plumbing for the Knowledge agent (PDFs → Delta → Vector Search) and Genie analytics
+> space are in place and runnable end-to-end against in-memory stubs. WS1 (MLflow
+> AgentServer + Lakebase + DABs), WS2 (real operational hybrid query), and WS4 (real
+> planner + HITL `interrupt()`) are the next slices.
 
 ## Start here
 
@@ -25,7 +28,11 @@ Vector Search**.
 3. **Set up the env:** `cp .env.example .env` and fill in your `DATABRICKS_CONFIG_PROFILE` +
    workspace context (see [`CLAUDE.md` → Running locally vs. on Databricks](CLAUDE.md#running-locally-vs-on-databricks-auth--config)),
    then `uv sync` against [`pyproject.toml`](pyproject.toml) (the Phase-0 dependency contract).
-4. **Pick your workstream** below and open its directory README.
+4. **Verify the supervisor compiles & routes** —
+   `USE_STUBS=1 uv run python -m agent_server.graph._smoke` runs the full path
+   (supervisor → fan-out gather → planner → gate → HITL → commit) against in-memory fakes,
+   no workspace needed.
+5. **Pick your workstream** below and open its directory README.
 
 ## Repo map
 
@@ -36,8 +43,8 @@ Vector Search**.
 | [`pyproject.toml`](pyproject.toml) | Phase-0 dependency contract (`uv sync`); no entrypoints yet |
 | [`databricks.yml`](databricks.yml) | DABs bundle (scaffold; empty resources) |
 | [`.claude/skills/`](.claude/skills/) | Vendored template build skills + skills README |
-| [`agent_server/`](agent_server/) | **WS1/WS5** — graph spine, routing, Lakebase state, App handlers |
-| [`data/`](data/) | **WS2/WS4** — synthetic data, embeddings, pgvector hybrid query, Acme seed |
+| [`agent_server/`](agent_server/) | **WS1/WS5** — `config.py` (env loader), `contracts.py` (Pydantic I/O), `graph/` (StateGraph + supervisor + gather + planner + gate), `tools/` (Knowledge / Genie / Operational tool wrappers + stubs) |
+| [`data/`](data/) | **WS2/WS3/WS4** — `knowledge/` PDF → Delta → VS index pipeline; `genie/` operational schema + programmatic space creation; (WS2) synthetic operational data + pgvector hybrid query land here |
 | [`frontend/`](frontend/) | chat UI (references `e2e-chatbot-app-next`, cloned on demand) |
 | [`scripts/`](scripts/) | setup/seed + skills installer |
 | [`docs/architecture.md`](docs/architecture.md) | Multi-agent design, topology, pgvector/VS split |
