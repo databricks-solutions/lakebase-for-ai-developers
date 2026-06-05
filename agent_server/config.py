@@ -59,6 +59,11 @@ class Settings(BaseModel):
     genie_space_id: str = Field(default="", alias="GENIE_SPACE_ID")
     warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
 
+    # --- Demo (operational data) ---
+    # In-scope planner identity for the user_access ACL. Unset → the current Databricks user
+    # (so the OBO demo works for whoever runs it); set to a fixed email for a shared demo.
+    demo_planner_user: str | None = Field(default=None, alias="DEMO_PLANNER_USER")
+
     # --- LLM endpoints — single inference model for v1 (one model, three callsites).
     # CLAUDE.md anticipates per-tier sizing (fast/mid/strong) for cost; promoting to that
     # is a one-line .env change. For now everything points at the same Opus endpoint.
@@ -72,9 +77,10 @@ class Settings(BaseModel):
         default="databricks-claude-opus-4-8", alias="LLM_PLANNER_ENDPOINT"
     )
 
-    # --- Knowledge ingestion (local-only paths used by data/knowledge/01_upload_pdfs.py) ---
+    # --- Knowledge ingestion (paths used by data/knowledge/01_upload_pdfs.py) ---
+    # Vendored in-repo (committed); resolved relative to the repo root by run-from-root scripts.
     seed_data_path: str = Field(
-        default="../strategic_revenue_demo/seed_data/bronze_documents",
+        default="data/knowledge/bronze_documents",
         alias="SEED_DATA_PATH",
     )
 
@@ -86,11 +92,43 @@ class Settings(BaseModel):
     lakebase_memory_schema: str = Field(
         default="supply_chain_planner_memory", alias="LAKEBASE_AGENT_MEMORY_SCHEMA"
     )
+    # Autoscaling ("projects") connection form — set instead of instance-name for autoscaling.
+    # _lakebase.connect() (02/04) accepts EITHER a full resource path here
+    # (projects/<p>/branches/<b>/endpoints/<id>) OR a bare endpoint id that it combines with the
+    # project/branch below — the same pair 03_sync_to_lakebase.py uses — so one config serves all.
+    lakebase_autoscaling_endpoint: str | None = Field(
+        default=None, alias="LAKEBASE_AUTOSCALING_ENDPOINT"
+    )
+    lakebase_autoscaling_project: str | None = Field(
+        default=None, alias="LAKEBASE_AUTOSCALING_PROJECT"
+    )
+    lakebase_autoscaling_branch: str | None = Field(
+        default=None, alias="LAKEBASE_AUTOSCALING_BRANCH"
+    )
+    # Postgres schema holding the operational tables (the pre-seeded pgvector `quality_incidents`
+    # plus the synced relational tables) — kept together so the hybrid query joins without
+    # cross-schema qualification. Distinct from `lakebase_memory_schema` (LangGraph-owned).
+    lakebase_operational_schema: str = Field(
+        default="public", alias="LAKEBASE_OPERATIONAL_SCHEMA"
+    )
+    # Local-dev escape hatch (Pattern 3): a full postgresql:// URL. Never commit a real one.
+    lakebase_pg_url: str | None = Field(default=None, alias="LAKEBASE_PG_URL")
+    # UC catalog registered for the Lakebase Postgres DB (target of Synced Tables:
+    # <lakebase_uc_catalog>.<lakebase_operational_schema>.<table>). One-time `databricks postgres
+    # create-catalog` per project. The DLT pipeline metadata uses a regular UC catalog (uc_catalog).
+    lakebase_uc_catalog: str | None = Field(default=None, alias="LAKEBASE_UC_CATALOG")
 
     # --- MLflow ---
     mlflow_experiment_id: str | None = Field(default=None, alias="MLFLOW_EXPERIMENT_ID")
 
     # --- Derived helpers ---
+    @property
+    def seed_data_dir(self) -> Path:
+        """`seed_data_path` as an absolute path. Relative values resolve against the repo root
+        (this file is `agent_server/config.py`), so it works regardless of the caller's CWD."""
+        p = Path(self.seed_data_path).expanduser()
+        return p if p.is_absolute() else Path(__file__).resolve().parents[1] / p
+
     @property
     def volume_uri(self) -> str:
         return f"/Volumes/{self.uc_catalog}/{self.uc_schema}/{self.uc_volume}"
@@ -120,4 +158,6 @@ def get_settings() -> Settings:
 
 
 # Module-level shortcut. Callers do: `from agent_server.config import settings`.
+# NOTE: Spark lives in the data layer (`data/_spark.py`), NOT here — the agent app never uses
+# Spark, and this module ships inside the app package.
 settings = get_settings()

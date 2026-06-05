@@ -78,11 +78,12 @@ def _upload(w: WorkspaceClient, local: Path, volume_subpath: str) -> None:
 
 
 def main() -> None:
-    src = Path(settings.seed_data_path).expanduser().resolve()
+    src = settings.seed_data_dir.resolve()  # relative paths resolve against the repo root
     if not src.exists():
         sys.exit(
             f"SEED_DATA_PATH does not exist: {src}\n"
-            "Set SEED_DATA_PATH in .env to point at strategic_revenue_demo/seed_data/bronze_documents/"
+            "The seed PDFs are vendored at data/knowledge/bronze_documents/ — run this from the "
+            "repo root, or set SEED_DATA_PATH in .env to point at the documents folder."
         )
 
     print(f"Source : {src}")

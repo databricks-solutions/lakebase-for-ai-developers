@@ -127,6 +127,25 @@ w = WorkspaceClient()  # local: uses DATABRICKS_CONFIG_PROFILE; on Databricks: a
   checkpointer/store generate short-lived OAuth DB credentials via the SDK and rotate them.
 - **`.env` is git-ignored.** Start from [`.env.example`](.env.example): `cp .env.example .env`.
 
+**Spark, both environments — use `get_spark()`, never a bare `spark` global.** Code that needs
+Spark (data-gen / setup only) must run identically in a Databricks notebook/job and locally. Get
+the session from [`data/_spark.py`](data/_spark.py): it returns the **ambient** session on
+Databricks and a **Databricks Connect** session locally (auth via `DATABRICKS_CONFIG_PROFILE`).
+
+```python
+from data._spark import get_spark
+spark = get_spark()  # ambient on Databricks; Databricks Connect locally
+```
+
+- **Spark is a data-layer concern — it lives in `data/`, never in `agent_server/`.** The agent app
+  doesn't use Spark, and `databricks-connect` is a **dev-only** dependency that must *never* be
+  installed on Databricks (it conflicts with the runtime pyspark). For serverless local compute,
+  set `serverless_compute_id = auto` in your CLI profile.
+- **One config source of truth:** `agent_server/config.py` → `settings` (typed, env-driven). Every
+  module (app *and* data scripts) reads catalog/schema/endpoints from it — don't hardcode or
+  re-read env elsewhere. (It stays in `agent_server` so it ships with the app wheel; it imports no
+  agent/Spark code, so data scripts importing it stays cheap.)
+
 **Common commands**
 
 ```bash

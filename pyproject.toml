@@ -3,7 +3,10 @@ name = "supply-chain-planner"
 version = "0.1.0"
 description = "Multi-agent supply-chain planner copilot — LangGraph on Databricks Apps, Lakebase state, MLflow tracing"
 readme = "README.md"
-requires-python = ">=3.11"
+# Capped below 3.13: the dev-only databricks-connect (16.x) pins numpy<2, and numpy<2 has no
+# cpython-3.13+ wheels (numpy added 3.13 support in 2.1), so uv's universal resolver fails on
+# the 3.13 split. DBR 16.x runs Python 3.12. Raise the cap once databricks-connect allows numpy>=2.
+requires-python = ">=3.11,<3.13"
 
 # Phase-0 environment contract. Deps mirror the reference template's pinned set
 # (https://github.com/databricks/app-templates/blob/main/agent-langgraph-advanced/pyproject.toml)
@@ -43,6 +46,10 @@ dev = [
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.6.0",
+    # Local Spark via Databricks Connect (get_spark() in data/_spark.py). DEV-ONLY: never install
+    # on Databricks — it conflicts with the runtime pyspark. Databricks Connect must match your
+    # workspace DBR major.minor — change this floor/cap to YOUR DBR (e.g. "==15.4.*" for DBR 15.4).
+    "databricks-connect>=16.1,<17",
 ]
 
 [tool.uv]

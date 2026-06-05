@@ -2,6 +2,28 @@
 
 PDFs → Delta chunks → Vector Search index, all parameterized by `.env`.
 
+## Seed corpus (vendored)
+
+The 67 seed PDFs + `document_metadata.json` live in [`bronze_documents/`](bronze_documents/)
+(committed, ~360K) so the pipeline runs without an external dependency. They are a deterministic
+(`seed=42`) copy from the `strategic_revenue_demo` repo's `seed_data/bronze_documents`. The world
+(Apex manufacturer; suppliers Henkel/DuPont/Nucor/Saint-Gobain/…; customers Caterpillar/John
+Deere/…; categories adhesives/fasteners/abrasives/safety/tools) matches the structured operational
+data in [`../operational/`](../operational/), so the Knowledge, Genie, and Operational agents
+describe the same supply chain.
+
+| Folder | Count | Contents |
+|---|---|---|
+| `contracts/` | 15 | Master supply agreements (volume pricing tiers, trade terms) |
+| `supplier_notifications/` | 10 | Raw-material price-change notices (Henkel, BASF, Nucor, …) |
+| `competitor_catalogs/` | 8 | Competitor 2026 price catalogs |
+| `promotion_briefs/` | 12 | Promotion proposals (budget, lift, ROI) |
+| `market_events/` | 22 | News PDFs — `real/` (tariffs, Fed, CHIPS/IRA) + `fictional/` (Apex & competitor events) |
+
+`document_metadata.json` (+ `market_events/event_metadata.json`) carry Q&A/guideline pairs for RAG
+eval. `01_upload_pdfs.py` (this repo's uploader) reads from `SEED_DATA_PATH`, default
+`data/knowledge/bronze_documents`.
+
 ## Run order
 
 | # | Script | Where | What it does |
@@ -17,7 +39,7 @@ After 03, paste the printed `VECTOR_SEARCH_ENDPOINT` and `VECTOR_SEARCH_INDEX` i
 | Env var | Default | Purpose |
 |---|---|---|
 | `UC_CATALOG` / `UC_SCHEMA` / `UC_VOLUME` | `supply_chain` / `planner` / `documents` | Target UC location |
-| `SEED_DATA_PATH` | `../strategic_revenue_demo/seed_data/bronze_documents` | Local PDFs to ingest (01 only) |
+| `SEED_DATA_PATH` | `data/knowledge/bronze_documents` (vendored) | PDFs to ingest (01 only); run from repo root |
 | `DATABRICKS_EMBEDDING_ENDPOINT` | `databricks-gte-large-en` | Managed embedding endpoint for the index |
 | `VECTOR_SEARCH_ENDPOINT` | `{UC_CATALOG}-vs-endpoint` if unset | VS endpoint (reuses if exists) |
 | `VECTOR_SEARCH_INDEX` | `{UC_CATALOG}.{UC_SCHEMA}.knowledge_chunks_index` if unset | VS index name |

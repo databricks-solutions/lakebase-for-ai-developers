@@ -150,19 +150,23 @@ SUPPLY_CHAIN_GENIE_SPACE = GenieSpaceConfig(
         ),
     ],
     sample_questions=[
-        "What is the total open PO quantity by supplier for Q4?",
-        "Which SKUs have on-hand quantity below 100 units?",
+        "What is the total open PO quantity by supplier for Q4 2026?",
+        "Which SKUs have current on-hand quantity below 100 units?",
         "Rank suppliers by risk_score, showing only those with status = 'at_risk'.",
         "For SKU 'SKU-1001', what is the on-hand inventory vs the sum of open POs?",
         "How many open POs are expected this month, broken out by supplier?",
+        "Which suppliers can supply adhesives?",
     ],
     instructions=(
         "When the user asks about 'fulfillment' or 'unfulfilled demand', interpret as "
         "(SUM(open_po qty) - SUM(on_hand qty)) per SKU. When they ask about a supplier by name, "
-        "join through suppliers.name. Always exclude rows where purchase_orders.status = "
-        "'cancelled' unless the user asks specifically about cancellations. Prefer the most "
-        "recent supplier_status row (MAX(last_updated)) when reporting current risk. For "
-        "inventory snapshots, use MAX(last_updated) per (sku, location)."
+        "join through suppliers.name. To find suppliers for a category, filter "
+        "suppliers.categories (a comma-separated list) with LIKE '%<category>%'. Always exclude "
+        "rows where purchase_orders.status = 'cancelled' unless the user asks specifically about "
+        "cancellations. 'Current' or 'at-risk' supplier state means the latest supplier_status row "
+        "per supplier (MAX(last_updated)); 'at-risk' means that latest status = 'at_risk'. "
+        "'Current' inventory means the latest row per (sku, location) by last_updated; sum across "
+        "locations for a per-SKU on-hand total."
     ),
     example_sqls=[
         ExampleSQL(
@@ -179,9 +183,12 @@ SUPPLY_CHAIN_GENIE_SPACE = GenieSpaceConfig(
         ExampleSQL(
             question="On-hand vs open POs for SKU 'SKU-1001'",
             sql=(
-                "WITH inv AS ("
-                "  SELECT sku, SUM(on_hand_qty) AS on_hand FROM {prefix}.inventory "
-                "  WHERE sku = 'SKU-1001' GROUP BY sku"
+                "WITH inv_latest AS ("
+                "  SELECT sku, location, on_hand_qty, "
+                "         ROW_NUMBER() OVER (PARTITION BY sku, location ORDER BY last_updated DESC) rn "
+                "  FROM {prefix}.inventory WHERE sku = 'SKU-1001'"
+                "), inv AS ("
+                "  SELECT sku, SUM(on_hand_qty) AS on_hand FROM inv_latest WHERE rn = 1 GROUP BY sku"
                 "), po AS ("
                 "  SELECT sku, SUM(qty) AS open_po FROM {prefix}.purchase_orders "
                 "  WHERE sku = 'SKU-1001' AND status = 'open' GROUP BY sku"
