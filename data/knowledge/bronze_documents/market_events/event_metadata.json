@@ -1,0 +1,331 @@
+[
+  {
+    "filename": "2022-02-24_russia-ukraine_war_raw_material_shock.pdf",
+    "type": "real",
+    "event_name": "Russia-Ukraine War Raw Material Shock",
+    "start_date": "2022-02-24",
+    "end_date": "2022-06-30",
+    "categories": [
+      "fasteners",
+      "tools",
+      "abrasives"
+    ],
+    "volume_mult": 0.97,
+    "price_mult": 1.12,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-02-24_russia-ukraine_war_raw_material_shock.pdf",
+    "question": "What was the impact of the Russia-Ukraine War Raw Material Shock event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-02-24 date and describe the volume impact on ['fasteners', 'tools', 'abrasives'] categories."
+  },
+  {
+    "filename": "2022-06-01_supply_chain_crisis_easing.pdf",
+    "type": "real",
+    "event_name": "Supply Chain Crisis Easing",
+    "start_date": "2022-06-01",
+    "end_date": "2022-12-31",
+    "categories": "all",
+    "volume_mult": 0.95,
+    "price_mult": 0.97,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-06-01_supply_chain_crisis_easing.pdf",
+    "question": "What was the impact of the Supply Chain Crisis Easing event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-06-01 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2022-03-16_fed_rate_hike_cycle_begins.pdf",
+    "type": "real",
+    "event_name": "Fed Rate Hike Cycle Begins",
+    "start_date": "2022-03-16",
+    "end_date": "2023-05-03",
+    "categories": [
+      "fasteners",
+      "adhesives",
+      "tools"
+    ],
+    "volume_mult": 0.97,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-03-16_fed_rate_hike_cycle_begins.pdf",
+    "question": "What was the impact of the Fed Rate Hike Cycle Begins event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-03-16 date and describe the volume impact on ['fasteners', 'adhesives', 'tools'] categories."
+  },
+  {
+    "filename": "2022-09-28_hurricane_ian.pdf",
+    "type": "real",
+    "event_name": "Hurricane Ian",
+    "start_date": "2022-09-28",
+    "end_date": "2022-10-21",
+    "categories": "all",
+    "volume_mult": 1.4,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-09-28_hurricane_ian.pdf",
+    "question": "What was the impact of the Hurricane Ian event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-09-28 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2022-07-01_steel_price_collapse_h2_2022.pdf",
+    "type": "real",
+    "event_name": "Steel Price Collapse H2 2022",
+    "start_date": "2022-07-01",
+    "end_date": "2022-12-31",
+    "categories": [
+      "fasteners",
+      "tools"
+    ],
+    "volume_mult": 1.03,
+    "price_mult": 0.88,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-07-01_steel_price_collapse_h2_2022.pdf",
+    "question": "What was the impact of the Steel Price Collapse H2 2022 event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-07-01 date and describe the volume impact on ['fasteners', 'tools'] categories."
+  },
+  {
+    "filename": "2022-08-09_ira_and_chips_act_signed.pdf",
+    "type": "real",
+    "event_name": "IRA and CHIPS Act Signed",
+    "start_date": "2022-08-09",
+    "end_date": "2026-03-31",
+    "categories": [
+      "tools",
+      "fasteners",
+      "abrasives"
+    ],
+    "volume_mult": 1.04,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-08-09_ira_and_chips_act_signed.pdf",
+    "question": "What was the impact of the IRA and CHIPS Act Signed event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-08-09 date and describe the volume impact on ['tools', 'fasteners', 'abrasives'] categories."
+  },
+  {
+    "filename": "2022-07-01_residential_construction_slowdown.pdf",
+    "type": "real",
+    "event_name": "Residential Construction Slowdown",
+    "start_date": "2022-07-01",
+    "end_date": "2023-06-30",
+    "categories": [
+      "fasteners",
+      "adhesives",
+      "tools"
+    ],
+    "volume_mult": 0.93,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2022-07-01_residential_construction_slowdown.pdf",
+    "question": "What was the impact of the Residential Construction Slowdown event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-07-01 date and describe the volume impact on ['fasteners', 'adhesives', 'tools'] categories."
+  },
+  {
+    "filename": "2022-03-01_apex_wins_fastenal_preferred_vendor_status_for_safety.pdf",
+    "type": "fictional",
+    "event_name": "Apex Wins Fastenal Preferred Vendor Status for Safety",
+    "start_date": "2022-03-01",
+    "end_date": null,
+    "categories": [
+      "safety"
+    ],
+    "volume_mult": 1.1,
+    "price_mult": 0.98,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2022-03-01_apex_wins_fastenal_preferred_vendor_status_for_safety.pdf",
+    "question": "What was the impact of the Apex Wins Fastenal Preferred Vendor Status for Safety event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-03-01 date and describe the volume impact on ['safety'] categories."
+  },
+  {
+    "filename": "2022-04-01_titangrip_supply_chain_disruption.pdf",
+    "type": "fictional",
+    "event_name": "TitanGrip Supply Chain Disruption",
+    "start_date": "2022-04-01",
+    "end_date": "2022-07-31",
+    "categories": [
+      "fasteners"
+    ],
+    "volume_mult": 1.08,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2022-04-01_titangrip_supply_chain_disruption.pdf",
+    "question": "What was the impact of the TitanGrip Supply Chain Disruption event on industrial supply demand?",
+    "guideline": "Answer should mention the 2022-04-01 date and describe the volume impact on ['fasteners'] categories."
+  },
+  {
+    "filename": "2023-01-15_apex_erp_migration_disruption.pdf",
+    "type": "fictional",
+    "event_name": "Apex ERP Migration Disruption",
+    "start_date": "2023-01-15",
+    "end_date": "2023-02-28",
+    "categories": "all",
+    "volume_mult": 0.92,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2023-01-15_apex_erp_migration_disruption.pdf",
+    "question": "What was the impact of the Apex ERP Migration Disruption event on industrial supply demand?",
+    "guideline": "Answer should mention the 2023-01-15 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2024-09-26_hurricane_helene.pdf",
+    "type": "real",
+    "event_name": "Hurricane Helene",
+    "start_date": "2024-09-26",
+    "end_date": "2024-10-17",
+    "categories": "all",
+    "volume_mult": 1.35,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2024-09-26_hurricane_helene.pdf",
+    "question": "What was the impact of the Hurricane Helene event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-09-26 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2024-10-09_hurricane_milton.pdf",
+    "type": "real",
+    "event_name": "Hurricane Milton",
+    "start_date": "2024-10-09",
+    "end_date": "2024-10-25",
+    "categories": "all",
+    "volume_mult": 1.28,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2024-10-09_hurricane_milton.pdf",
+    "question": "What was the impact of the Hurricane Milton event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-10-09 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2024-09-18_fed_rate_cut_begins.pdf",
+    "type": "real",
+    "event_name": "Fed Rate Cut Begins",
+    "start_date": "2024-09-18",
+    "end_date": "2025-03-31",
+    "categories": [
+      "fasteners",
+      "adhesives",
+      "tools"
+    ],
+    "volume_mult": 1.03,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2024-09-18_fed_rate_cut_begins.pdf",
+    "question": "What was the impact of the Fed Rate Cut Begins event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-09-18 date and describe the volume impact on ['fasteners', 'adhesives', 'tools'] categories."
+  },
+  {
+    "filename": "2024-07-01_chips_act_manufacturing_construction_surge.pdf",
+    "type": "real",
+    "event_name": "CHIPS Act Manufacturing Construction Surge",
+    "start_date": "2024-07-01",
+    "end_date": "2026-03-31",
+    "categories": [
+      "tools",
+      "fasteners",
+      "abrasives"
+    ],
+    "volume_mult": 1.06,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2024-07-01_chips_act_manufacturing_construction_surge.pdf",
+    "question": "What was the impact of the CHIPS Act Manufacturing Construction Surge event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-07-01 date and describe the volume impact on ['tools', 'fasteners', 'abrasives'] categories."
+  },
+  {
+    "filename": "2025-03-12_steel_aluminum_tariff_25%.pdf",
+    "type": "real",
+    "event_name": "Steel/Aluminum Tariff (25%)",
+    "start_date": "2025-03-12",
+    "end_date": "2026-03-31",
+    "categories": [
+      "fasteners",
+      "tools",
+      "abrasives"
+    ],
+    "volume_mult": 0.95,
+    "price_mult": 1.08,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2025-03-12_steel_aluminum_tariff_25%.pdf",
+    "question": "What was the impact of the Steel/Aluminum Tariff (25%) event on industrial supply demand?",
+    "guideline": "Answer should mention the 2025-03-12 date and describe the volume impact on ['fasteners', 'tools', 'abrasives'] categories."
+  },
+  {
+    "filename": "2025-04-02_reciprocal_tariffs_april_2,_2025.pdf",
+    "type": "real",
+    "event_name": "Reciprocal Tariffs (April 2, 2025)",
+    "start_date": "2025-04-02",
+    "end_date": "2025-06-30",
+    "categories": "all",
+    "volume_mult": 0.92,
+    "price_mult": 1.05,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2025-04-02_reciprocal_tariffs_april_2,_2025.pdf",
+    "question": "What was the impact of the Reciprocal Tariffs (April 2, 2025) event on industrial supply demand?",
+    "guideline": "Answer should mention the 2025-04-02 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2025-04-09_tariff_90-day_pause_except_china.pdf",
+    "type": "real",
+    "event_name": "Tariff 90-Day Pause (except China)",
+    "start_date": "2025-04-09",
+    "end_date": "2025-07-08",
+    "categories": "all",
+    "volume_mult": 1.04,
+    "price_mult": 0.98,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/real/2025-04-09_tariff_90-day_pause_except_china.pdf",
+    "question": "What was the impact of the Tariff 90-Day Pause (except China) event on industrial supply demand?",
+    "guideline": "Answer should mention the 2025-04-09 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2024-07-01_apex_wins_home_depot_national_distribution_deal.pdf",
+    "type": "fictional",
+    "event_name": "Apex Wins Home Depot National Distribution Deal",
+    "start_date": "2024-07-01",
+    "end_date": null,
+    "categories": [
+      "fasteners"
+    ],
+    "volume_mult": 1.15,
+    "price_mult": 0.97,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2024-07-01_apex_wins_home_depot_national_distribution_deal.pdf",
+    "question": "What was the impact of the Apex Wins Home Depot National Distribution Deal event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-07-01 date and describe the volume impact on ['fasteners'] categories."
+  },
+  {
+    "filename": "2024-04-15_titangrip_launches_titanforce_ultra_hex_bolt_line.pdf",
+    "type": "fictional",
+    "event_name": "TitanGrip Launches TitanForce Ultra Hex Bolt Line",
+    "start_date": "2024-04-15",
+    "end_date": null,
+    "categories": [
+      "fasteners"
+    ],
+    "volume_mult": 1.0,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2024-04-15_titangrip_launches_titanforce_ultra_hex_bolt_line.pdf",
+    "question": "What was the impact of the TitanGrip Launches TitanForce Ultra Hex Bolt Line event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-04-15 date and describe the price impact on ['fasteners'] categories."
+  },
+  {
+    "filename": "2024-10-01_precisionbond_adhesive_recall_viscosity_defect.pdf",
+    "type": "fictional",
+    "event_name": "PrecisionBond Adhesive Recall (Viscosity Defect)",
+    "start_date": "2024-10-01",
+    "end_date": "2024-12-15",
+    "categories": [
+      "adhesives"
+    ],
+    "volume_mult": 1.12,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2024-10-01_precisionbond_adhesive_recall_viscosity_defect.pdf",
+    "question": "What was the impact of the PrecisionBond Adhesive Recall (Viscosity Defect) event on industrial supply demand?",
+    "guideline": "Answer should mention the 2024-10-01 date and describe the volume impact on ['adhesives'] categories."
+  },
+  {
+    "filename": "2025-03-01_apex_opens_southeast_distribution_center.pdf",
+    "type": "fictional",
+    "event_name": "Apex Opens Southeast Distribution Center",
+    "start_date": "2025-03-01",
+    "end_date": null,
+    "categories": "all",
+    "volume_mult": 1.05,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2025-03-01_apex_opens_southeast_distribution_center.pdf",
+    "question": "What was the impact of the Apex Opens Southeast Distribution Center event on industrial supply demand?",
+    "guideline": "Answer should mention the 2025-03-01 date and describe the volume impact on all categories."
+  },
+  {
+    "filename": "2025-06-01_abrasivetech_acquired_by_conglomerate.pdf",
+    "type": "fictional",
+    "event_name": "AbrasiveTech Acquired by Conglomerate",
+    "start_date": "2025-06-01",
+    "end_date": "2025-09-01",
+    "categories": [
+      "abrasives"
+    ],
+    "volume_mult": 1.03,
+    "price_mult": 1.0,
+    "pdf_path": "/Users/kylie.taylor/strategic_revenue_demo/seed_data/bronze_documents/market_events/fictional/2025-06-01_abrasivetech_acquired_by_conglomerate.pdf",
+    "question": "What was the impact of the AbrasiveTech Acquired by Conglomerate event on industrial supply demand?",
+    "guideline": "Answer should mention the 2025-06-01 date and describe the volume impact on ['abrasives'] categories."
+  }
+]

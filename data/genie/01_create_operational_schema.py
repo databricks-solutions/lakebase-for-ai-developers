@@ -10,7 +10,8 @@
 # MAGIC Idempotent. Re-runs are a no-op (CREATE TABLE IF NOT EXISTS). Safe to run as Chandhana's
 # MAGIC WS2 work lands — she'll either ALTER TABLE or REPLACE TABLE to evolve the schema.
 # MAGIC
-# MAGIC Run as a notebook or job on Databricks.
+# MAGIC Runs both ways via `get_spark()` — the ambient session on Databricks (notebook/job), or
+# MAGIC Databricks Connect locally (`uv run python data/genie/01_create_operational_schema.py`).
 
 # COMMAND ----------
 import sys
@@ -24,6 +25,10 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from agent_server.config import settings
+from data._spark import get_spark
+
+# Same code locally (Databricks Connect) and on Databricks (ambient session).
+spark = get_spark()
 
 # COMMAND ----------
 CATALOG = settings.uc_catalog
@@ -32,8 +37,14 @@ PREFIX = f"`{CATALOG}`.`{SCHEMA}`"
 
 print(f"Target schema: {CATALOG}.{SCHEMA}")
 
-spark.sql(f"CREATE CATALOG IF NOT EXISTS `{CATALOG}`")  # noqa: F821
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {PREFIX}")  # noqa: F821
+# Create the catalog only if it's missing. `CREATE CATALOG IF NOT EXISTS` still requires the
+# metastore-level CREATE CATALOG privilege even when the catalog already exists (UC checks the
+# grant before the IF NOT EXISTS short-circuits), which a schema-scoped user won't have. Guarding
+# on existence lets users who can only create schemas in an existing catalog run this.
+existing_catalogs = {r.catalog for r in spark.sql("SHOW CATALOGS").collect()}
+if CATALOG not in existing_catalogs:
+    spark.sql(f"CREATE CATALOG IF NOT EXISTS `{CATALOG}`")
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {PREFIX}")
 
 # COMMAND ----------
 DDL_SUPPLIERS = f"""
@@ -94,13 +105,13 @@ DDL_SUPPLIER_STATUS = f"""
 """
 
 for ddl in (DDL_SUPPLIERS, DDL_PRODUCT_DIM, DDL_INVENTORY, DDL_PURCHASE_ORDERS, DDL_SUPPLIER_STATUS):
-    spark.sql(ddl)  # noqa: F821
+    spark.sql(ddl)
 
 # COMMAND ----------
 # Verify
 for table in ("suppliers", "product_dim", "inventory", "purchase_orders", "supplier_status"):
     fq = f"{CATALOG}.{SCHEMA}.{table}"
-    cnt = spark.table(fq).count()  # noqa: F821
+    cnt = spark.table(fq).count()
     print(f"  {fq}: {cnt} rows")
 
 print("\nDone. WS2 (Chandhana) will populate these tables with synthetic data.")

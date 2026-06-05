@@ -1,0 +1,572 @@
+[
+  {
+    "filename": "CTR-2024-1000_Caterpillar_Inc.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2024-1000",
+    "customer": "Caterpillar Inc.",
+    "customer_type": "end_consumer",
+    "categories": [
+      "adhesives"
+    ],
+    "trade_type": "spa",
+    "trade_value": 40000,
+    "start_date": "2024-01-26T00:00:00",
+    "end_date": "2029-01-24T00:00:00",
+    "question": "What are the volume pricing tiers in the Caterpillar Inc. contract CTR-2024-1000?",
+    "guideline": "Answer should mention Tier 1 at $6.50, Tier 2 at $5.98, Tier 3 at $5.52 per unit."
+  },
+  {
+    "filename": "CTR-2024-1001_Parker_Hannifin.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2024-1001",
+    "customer": "Parker Hannifin",
+    "customer_type": "end_consumer",
+    "categories": [
+      "fasteners",
+      "adhesives"
+    ],
+    "trade_type": "early_payment_discount",
+    "trade_value": 183000,
+    "start_date": "2024-08-13T00:00:00",
+    "end_date": "2027-08-13T00:00:00",
+    "question": "What are the volume pricing tiers in the Parker Hannifin contract CTR-2024-1001?",
+    "guideline": "Answer should mention Tier 1 at $20.24, Tier 2 at $18.62, Tier 3 at $17.20 per unit."
+  },
+  {
+    "filename": "CTR-2024-1002_Menards.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2024-1002",
+    "customer": "Menards",
+    "customer_type": "retail",
+    "categories": [
+      "safety",
+      "abrasives",
+      "tools"
+    ],
+    "trade_type": "slotting_fee",
+    "trade_value": 54000,
+    "start_date": "2024-05-07T00:00:00",
+    "end_date": "2026-05-07T00:00:00",
+    "question": "What are the volume pricing tiers in the Menards contract CTR-2024-1002?",
+    "guideline": "Answer should mention Tier 1 at $43.06, Tier 2 at $39.62, Tier 3 at $36.60 per unit."
+  },
+  {
+    "filename": "CTR-2024-1003_Ace_Hardware.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2024-1003",
+    "customer": "Ace Hardware",
+    "customer_type": "retail",
+    "categories": [
+      "safety"
+    ],
+    "trade_type": "co_op_advertising",
+    "trade_value": 184000,
+    "start_date": "2024-06-15T00:00:00",
+    "end_date": "2026-06-15T00:00:00",
+    "question": "What are the volume pricing tiers in the Ace Hardware contract CTR-2024-1003?",
+    "guideline": "Answer should mention Tier 1 at $9.84, Tier 2 at $9.05, Tier 3 at $8.36 per unit."
+  },
+  {
+    "filename": "CTR-2024-1004_Lockheed_Martin.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2024-1004",
+    "customer": "Lockheed Martin",
+    "customer_type": "end_consumer",
+    "categories": [
+      "fasteners"
+    ],
+    "trade_type": "volume_rebate",
+    "trade_value": 85000,
+    "start_date": "2025-12-02T00:00:00",
+    "end_date": "2028-12-01T00:00:00",
+    "question": "What are the volume pricing tiers in the Lockheed Martin contract CTR-2024-1004?",
+    "guideline": "Answer should mention Tier 1 at $33.46, Tier 2 at $30.78, Tier 3 at $28.44 per unit."
+  },
+  {
+    "filename": "CTR-2025-1005_Fastenal.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2025-1005",
+    "customer": "Fastenal",
+    "customer_type": "reseller",
+    "categories": [
+      "abrasives",
+      "tools",
+      "safety"
+    ],
+    "trade_type": "scan_back",
+    "trade_value": 107000,
+    "start_date": "2025-07-28T00:00:00",
+    "end_date": "2028-07-27T00:00:00",
+    "question": "What are the volume pricing tiers in the Fastenal contract CTR-2025-1005?",
+    "guideline": "Answer should mention Tier 1 at $32.12, Tier 2 at $29.55, Tier 3 at $27.30 per unit."
+  },
+  {
+    "filename": "CTR-2025-1006_Caterpillar_Inc.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2025-1006",
+    "customer": "Caterpillar Inc.",
+    "customer_type": "end_consumer",
+    "categories": [
+      "abrasives",
+      "safety"
+    ],
+    "trade_type": "early_payment_discount",
+    "trade_value": 146000,
+    "start_date": "2025-01-29T00:00:00",
+    "end_date": "2028-01-29T00:00:00",
+    "question": "What are the volume pricing tiers in the Caterpillar Inc. contract CTR-2025-1006?",
+    "guideline": "Answer should mention Tier 1 at $38.89, Tier 2 at $35.78, Tier 3 at $33.06 per unit."
+  },
+  {
+    "filename": "CTR-2025-1007_John_Deere.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2025-1007",
+    "customer": "John Deere",
+    "customer_type": "end_consumer",
+    "categories": [
+      "safety"
+    ],
+    "trade_type": "early_payment_discount",
+    "trade_value": 168000,
+    "start_date": "2025-05-27T00:00:00",
+    "end_date": "2027-05-27T00:00:00",
+    "question": "What are the volume pricing tiers in the John Deere contract CTR-2025-1007?",
+    "guideline": "Answer should mention Tier 1 at $25.45, Tier 2 at $23.41, Tier 3 at $21.63 per unit."
+  },
+  {
+    "filename": "CTR-2025-1008_Fastenal.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2025-1008",
+    "customer": "Fastenal",
+    "customer_type": "reseller",
+    "categories": [
+      "tools",
+      "fasteners",
+      "safety"
+    ],
+    "trade_type": "off_invoice",
+    "trade_value": 37000,
+    "start_date": "2025-08-03T00:00:00",
+    "end_date": "2026-08-03T00:00:00",
+    "question": "What are the volume pricing tiers in the Fastenal contract CTR-2025-1008?",
+    "guideline": "Answer should mention Tier 1 at $46.59, Tier 2 at $42.86, Tier 3 at $39.60 per unit."
+  },
+  {
+    "filename": "CTR-2025-1009_John_Deere.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2025-1009",
+    "customer": "John Deere",
+    "customer_type": "end_consumer",
+    "categories": [
+      "tools",
+      "abrasives"
+    ],
+    "trade_type": "early_payment_discount",
+    "trade_value": 35000,
+    "start_date": "2025-02-12T00:00:00",
+    "end_date": "2030-02-11T00:00:00",
+    "question": "What are the volume pricing tiers in the John Deere contract CTR-2025-1009?",
+    "guideline": "Answer should mention Tier 1 at $5.41, Tier 2 at $4.98, Tier 3 at $4.60 per unit."
+  },
+  {
+    "filename": "CTR-2026-1010_Lockheed_Martin.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2026-1010",
+    "customer": "Lockheed Martin",
+    "customer_type": "end_consumer",
+    "categories": [
+      "abrasives"
+    ],
+    "trade_type": "spa",
+    "trade_value": 38000,
+    "start_date": "2024-10-12T00:00:00",
+    "end_date": "2029-10-11T00:00:00",
+    "question": "What are the volume pricing tiers in the Lockheed Martin contract CTR-2026-1010?",
+    "guideline": "Answer should mention Tier 1 at $6.53, Tier 2 at $6.01, Tier 3 at $5.55 per unit."
+  },
+  {
+    "filename": "CTR-2026-1011_Caterpillar_Inc.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2026-1011",
+    "customer": "Caterpillar Inc.",
+    "customer_type": "end_consumer",
+    "categories": [
+      "fasteners",
+      "adhesives"
+    ],
+    "trade_type": "early_payment_discount",
+    "trade_value": 54000,
+    "start_date": "2024-03-03T00:00:00",
+    "end_date": "2027-03-03T00:00:00",
+    "question": "What are the volume pricing tiers in the Caterpillar Inc. contract CTR-2026-1011?",
+    "guideline": "Answer should mention Tier 1 at $13.99, Tier 2 at $12.87, Tier 3 at $11.89 per unit."
+  },
+  {
+    "filename": "CTR-2026-1012_Applied_Industrial.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2026-1012",
+    "customer": "Applied Industrial",
+    "customer_type": "reseller",
+    "categories": [
+      "adhesives"
+    ],
+    "trade_type": "off_invoice",
+    "trade_value": 109000,
+    "start_date": "2025-07-07T00:00:00",
+    "end_date": "2026-07-07T00:00:00",
+    "question": "What are the volume pricing tiers in the Applied Industrial contract CTR-2026-1012?",
+    "guideline": "Answer should mention Tier 1 at $2.10, Tier 2 at $1.93, Tier 3 at $1.78 per unit."
+  },
+  {
+    "filename": "CTR-2026-1013_True_Value.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2026-1013",
+    "customer": "True Value",
+    "customer_type": "retail",
+    "categories": [
+      "abrasives",
+      "tools",
+      "fasteners"
+    ],
+    "trade_type": "off_invoice",
+    "trade_value": 53000,
+    "start_date": "2024-10-19T00:00:00",
+    "end_date": "2026-10-19T00:00:00",
+    "question": "What are the volume pricing tiers in the True Value contract CTR-2026-1013?",
+    "guideline": "Answer should mention Tier 1 at $30.04, Tier 2 at $27.64, Tier 3 at $25.53 per unit."
+  },
+  {
+    "filename": "CTR-2026-1014_Fastenal.pdf",
+    "type": "contract",
+    "contract_id": "CTR-2026-1014",
+    "customer": "Fastenal",
+    "customer_type": "reseller",
+    "categories": [
+      "adhesives",
+      "tools",
+      "fasteners"
+    ],
+    "trade_type": "off_invoice",
+    "trade_value": 150000,
+    "start_date": "2024-03-11T00:00:00",
+    "end_date": "2027-03-11T00:00:00",
+    "question": "What are the volume pricing tiers in the Fastenal contract CTR-2026-1014?",
+    "guideline": "Answer should mention Tier 1 at $11.80, Tier 2 at $10.86, Tier 3 at $10.03 per unit."
+  },
+  {
+    "filename": "TitanGrip_Industrial_adhesives_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "TitanGrip Industrial",
+    "category": "adhesives",
+    "question": "What is TitanGrip Industrial's pricing for adhesives products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the TitanGrip Industrial adhesives catalog."
+  },
+  {
+    "filename": "TitanGrip_Industrial_safety_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "TitanGrip Industrial",
+    "category": "safety",
+    "question": "What is TitanGrip Industrial's pricing for safety products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the TitanGrip Industrial safety catalog."
+  },
+  {
+    "filename": "PrecisionBond_Solutions_adhesives_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "PrecisionBond Solutions",
+    "category": "adhesives",
+    "question": "What is PrecisionBond Solutions's pricing for adhesives products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the PrecisionBond Solutions adhesives catalog."
+  },
+  {
+    "filename": "PrecisionBond_Solutions_safety_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "PrecisionBond Solutions",
+    "category": "safety",
+    "question": "What is PrecisionBond Solutions's pricing for safety products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the PrecisionBond Solutions safety catalog."
+  },
+  {
+    "filename": "SafeEdge_Supply_safety_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "SafeEdge Supply",
+    "category": "safety",
+    "question": "What is SafeEdge Supply's pricing for safety products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the SafeEdge Supply safety catalog."
+  },
+  {
+    "filename": "SafeEdge_Supply_tools_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "SafeEdge Supply",
+    "category": "tools",
+    "question": "What is SafeEdge Supply's pricing for tools products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the SafeEdge Supply tools catalog."
+  },
+  {
+    "filename": "AbrasiveTech_Inc._tools_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "AbrasiveTech Inc.",
+    "category": "tools",
+    "question": "What is AbrasiveTech Inc.'s pricing for tools products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the AbrasiveTech Inc. tools catalog."
+  },
+  {
+    "filename": "AbrasiveTech_Inc._abrasives_catalog_2026.pdf",
+    "type": "competitor_catalog",
+    "competitor": "AbrasiveTech Inc.",
+    "category": "abrasives",
+    "question": "What is AbrasiveTech Inc.'s pricing for abrasives products in their 2026 catalog?",
+    "guideline": "Answer should list specific products and prices from the AbrasiveTech Inc. abrasives catalog."
+  },
+  {
+    "filename": "PROMO-2025-100_Motion_Industries_fasteners.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2025-100",
+    "customer": "Motion Industries",
+    "category": "fasteners",
+    "discount_depth": 15,
+    "budget": 10000,
+    "question": "What is the expected ROI and budget for the Motion Industries fasteners promotion PROMO-2025-100?",
+    "guideline": "Answer should mention $10,000.00 budget, 34% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2025-101_Ace_Hardware_safety.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2025-101",
+    "customer": "Ace Hardware",
+    "category": "safety",
+    "discount_depth": 5,
+    "budget": 25000,
+    "question": "What is the expected ROI and budget for the Ace Hardware safety promotion PROMO-2025-101?",
+    "guideline": "Answer should mention $25,000.00 budget, 39% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2025-102_True_Value_fasteners.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2025-102",
+    "customer": "True Value",
+    "category": "fasteners",
+    "discount_depth": 25,
+    "budget": 43000,
+    "question": "What is the expected ROI and budget for the True Value fasteners promotion PROMO-2025-102?",
+    "guideline": "Answer should mention $43,000.00 budget, 26% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2025-103_Menards_abrasives.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2025-103",
+    "customer": "Menards",
+    "category": "abrasives",
+    "discount_depth": 5,
+    "budget": 44000,
+    "question": "What is the expected ROI and budget for the Menards abrasives promotion PROMO-2025-103?",
+    "guideline": "Answer should mention $44,000.00 budget, 21% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2025-104_Motion_Industries_fasteners.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2025-104",
+    "customer": "Motion Industries",
+    "category": "fasteners",
+    "discount_depth": 25,
+    "budget": 26000,
+    "question": "What is the expected ROI and budget for the Motion Industries fasteners promotion PROMO-2025-104?",
+    "guideline": "Answer should mention $26,000.00 budget, 14% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2025-105_Motion_Industries_adhesives.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2025-105",
+    "customer": "Motion Industries",
+    "category": "adhesives",
+    "discount_depth": 25,
+    "budget": 30000,
+    "question": "What is the expected ROI and budget for the Motion Industries adhesives promotion PROMO-2025-105?",
+    "guideline": "Answer should mention $30,000.00 budget, 36% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2026-106_The_Home_Depot_safety.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2026-106",
+    "customer": "The Home Depot",
+    "category": "safety",
+    "discount_depth": 5,
+    "budget": 32000,
+    "question": "What is the expected ROI and budget for the The Home Depot safety promotion PROMO-2026-106?",
+    "guideline": "Answer should mention $32,000.00 budget, 12% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2026-107_Applied_Industrial_tools.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2026-107",
+    "customer": "Applied Industrial",
+    "category": "tools",
+    "discount_depth": 5,
+    "budget": 9000,
+    "question": "What is the expected ROI and budget for the Applied Industrial tools promotion PROMO-2026-107?",
+    "guideline": "Answer should mention $9,000.00 budget, 31% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2026-108_Applied_Industrial_tools.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2026-108",
+    "customer": "Applied Industrial",
+    "category": "tools",
+    "discount_depth": 15,
+    "budget": 28000,
+    "question": "What is the expected ROI and budget for the Applied Industrial tools promotion PROMO-2026-108?",
+    "guideline": "Answer should mention $28,000.00 budget, 24% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2026-109_Motion_Industries_safety.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2026-109",
+    "customer": "Motion Industries",
+    "category": "safety",
+    "discount_depth": 10,
+    "budget": 12000,
+    "question": "What is the expected ROI and budget for the Motion Industries safety promotion PROMO-2026-109?",
+    "guideline": "Answer should mention $12,000.00 budget, 14% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2026-110_Applied_Industrial_abrasives.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2026-110",
+    "customer": "Applied Industrial",
+    "category": "abrasives",
+    "discount_depth": 20,
+    "budget": 6000,
+    "question": "What is the expected ROI and budget for the Applied Industrial abrasives promotion PROMO-2026-110?",
+    "guideline": "Answer should mention $6,000.00 budget, 21% expected lift, and the competitive context."
+  },
+  {
+    "filename": "PROMO-2026-111_Applied_Industrial_fasteners.pdf",
+    "type": "promotion_brief",
+    "promotion_id": "PROMO-2026-111",
+    "customer": "Applied Industrial",
+    "category": "fasteners",
+    "discount_depth": 25,
+    "budget": 45000,
+    "question": "What is the expected ROI and budget for the Applied Industrial fasteners promotion PROMO-2026-111?",
+    "guideline": "Answer should mention $45,000.00 budget, 28% expected lift, and the competitive context."
+  },
+  {
+    "filename": "Nucor_Steel_Corporation_Carbon_Steel_20260616.pdf",
+    "type": "supplier_notification",
+    "supplier": "Nucor Steel Corporation",
+    "material": "Carbon Steel",
+    "change_pct": 12.6,
+    "effective_date": "2026-06-16T00:00:00",
+    "old_price": 3.57,
+    "new_price": 4.02,
+    "question": "What is the price change for Carbon Steel from Nucor Steel Corporation and when does it take effect?",
+    "guideline": "Answer should mention 12.6% increase, effective June 16, 2026, from $3.57 to $4.02."
+  },
+  {
+    "filename": "Allegheny_Technologies_Stainless_Steel_304_316_20261019.pdf",
+    "type": "supplier_notification",
+    "supplier": "Allegheny Technologies",
+    "material": "Stainless Steel 304/316",
+    "change_pct": -4.1,
+    "effective_date": "2026-10-19T00:00:00",
+    "old_price": 21.14,
+    "new_price": 20.27,
+    "question": "What is the price change for Stainless Steel 304/316 from Allegheny Technologies and when does it take effect?",
+    "guideline": "Answer should mention -4.1% decrease, effective October 19, 2026, from $21.14 to $20.27."
+  },
+  {
+    "filename": "DuPont_de_Nemours_Epoxy_Base_Compound_20250216.pdf",
+    "type": "supplier_notification",
+    "supplier": "DuPont de Nemours",
+    "material": "Epoxy Base Compound",
+    "change_pct": 13.8,
+    "effective_date": "2025-02-16T00:00:00",
+    "old_price": 15.64,
+    "new_price": 17.8,
+    "question": "What is the price change for Epoxy Base Compound from DuPont de Nemours and when does it take effect?",
+    "guideline": "Answer should mention 13.8% increase, effective February 16, 2025, from $15.64 to $17.80."
+  },
+  {
+    "filename": "BASF_Corporation_Polyurethane_Resin_20260510.pdf",
+    "type": "supplier_notification",
+    "supplier": "BASF Corporation",
+    "material": "Polyurethane Resin",
+    "change_pct": -2.4,
+    "effective_date": "2026-05-10T00:00:00",
+    "old_price": 17.37,
+    "new_price": 16.95,
+    "question": "What is the price change for Polyurethane Resin from BASF Corporation and when does it take effect?",
+    "guideline": "Answer should mention -2.4% decrease, effective May 10, 2026, from $17.37 to $16.95."
+  },
+  {
+    "filename": "3M_Raw_Materials_Division_Aramid_Fiber_20260421.pdf",
+    "type": "supplier_notification",
+    "supplier": "3M Raw Materials Division",
+    "material": "Aramid Fiber",
+    "change_pct": -3.3,
+    "effective_date": "2026-04-21T00:00:00",
+    "old_price": 18.49,
+    "new_price": 17.88,
+    "question": "What is the price change for Aramid Fiber from 3M Raw Materials Division and when does it take effect?",
+    "guideline": "Answer should mention -3.3% decrease, effective April 21, 2026, from $18.49 to $17.88."
+  },
+  {
+    "filename": "Saint-Gobain_Abrasives_Silicon_Carbide_20260115.pdf",
+    "type": "supplier_notification",
+    "supplier": "Saint-Gobain Abrasives",
+    "material": "Silicon Carbide",
+    "change_pct": 3.8,
+    "effective_date": "2026-01-15T00:00:00",
+    "old_price": 11.52,
+    "new_price": 11.96,
+    "question": "What is the price change for Silicon Carbide from Saint-Gobain Abrasives and when does it take effect?",
+    "guideline": "Answer should mention 3.8% increase, effective January 15, 2026, from $11.52 to $11.96."
+  },
+  {
+    "filename": "Alcoa_Corporation_Aluminum_6061_20260129.pdf",
+    "type": "supplier_notification",
+    "supplier": "Alcoa Corporation",
+    "material": "Aluminum 6061",
+    "change_pct": 11.9,
+    "effective_date": "2026-01-29T00:00:00",
+    "old_price": 23.38,
+    "new_price": 26.16,
+    "question": "What is the price change for Aluminum 6061 from Alcoa Corporation and when does it take effect?",
+    "guideline": "Answer should mention 11.9% increase, effective January 29, 2026, from $23.38 to $26.16."
+  },
+  {
+    "filename": "Dow_Chemical_HDPE_Resin_20260526.pdf",
+    "type": "supplier_notification",
+    "supplier": "Dow Chemical",
+    "material": "HDPE Resin",
+    "change_pct": 14.9,
+    "effective_date": "2026-05-26T00:00:00",
+    "old_price": 23.66,
+    "new_price": 27.19,
+    "question": "What is the price change for HDPE Resin from Dow Chemical and when does it take effect?",
+    "guideline": "Answer should mention 14.9% increase, effective May 26, 2026, from $23.66 to $27.19."
+  },
+  {
+    "filename": "Washington_Mills_Aluminum_Oxide_20260821.pdf",
+    "type": "supplier_notification",
+    "supplier": "Washington Mills",
+    "material": "Aluminum Oxide",
+    "change_pct": 0.1,
+    "effective_date": "2026-08-21T00:00:00",
+    "old_price": 7.5,
+    "new_price": 7.51,
+    "question": "What is the price change for Aluminum Oxide from Washington Mills and when does it take effect?",
+    "guideline": "Answer should mention 0.1% increase, effective August 21, 2026, from $7.50 to $7.51."
+  },
+  {
+    "filename": "Henkel_AG_Structural_Adhesive_Base_20250518.pdf",
+    "type": "supplier_notification",
+    "supplier": "Henkel AG",
+    "material": "Structural Adhesive Base",
+    "change_pct": 12.3,
+    "effective_date": "2025-05-18T00:00:00",
+    "old_price": 10.31,
+    "new_price": 11.58,
+    "question": "What is the price change for Structural Adhesive Base from Henkel AG and when does it take effect?",
+    "guideline": "Answer should mention 12.3% increase, effective May 18, 2025, from $10.31 to $11.58."
+  }
+]
