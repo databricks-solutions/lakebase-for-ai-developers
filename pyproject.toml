@@ -8,11 +8,9 @@ readme = "README.md"
 # the 3.13 split. DBR 16.x runs Python 3.12. Raise the cap once databricks-connect allows numpy>=2.
 requires-python = ">=3.11,<3.13"
 
-# Phase-0 environment contract. Deps mirror the reference template's pinned set
+# Environment contract. Deps mirror the reference template's pinned set
 # (https://github.com/databricks/app-templates/blob/main/agent-langgraph-advanced/pyproject.toml)
-# plus the data/pgvector deps WS2 needs for the spike. NOTE: no [project.scripts] entrypoints
-# yet — those (start-app, start-server, quickstart) point at agent_server/ + scripts/ modules
-# that WS1 will bring over from the template. Add them then.
+# plus the data/pgvector deps WS2 needs for the spike.
 dependencies = [
     # --- App / server (from the template) ---
     "fastapi>=0.129.0",
@@ -41,8 +39,26 @@ dependencies = [
     "databricks-vectorsearch>=0.50",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The app wheel ships `agent_server` only. The `data/` package is dev/setup tooling (Spark
+# data-gen run as jobs) and must NOT land in the app wheel — `databricks-connect` conflicts with
+# the Databricks runtime pyspark (see the dev group below).
+[tool.hatch.build.targets.wheel]
+packages = ["agent_server"]
+
+[project.scripts]
+# P0: `start-server` runs the agent server (FastAPI + run/poll/resume + chat proxy). `start-app`
+# is an alias for now; Slice 4 repoints it at a launcher that also boots the Next.js frontend.
+start-server = "agent_server.start_server:main"
+start-app = "agent_server.start_server:main"
+agent-evaluate = "agent_server.evaluate_agent:evaluate"
+
 [dependency-groups]
 dev = [
+    "hatchling>=1.28.0",
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.6.0",
@@ -54,16 +70,3 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
-# Scaffold has no Python package yet (no supply_chain_planner/ dir), so don't try to build the
-# project itself — `uv sync` just installs dependencies into the env. When WS1 brings the
-# template's agent_server/ + scripts/ code, remove this line (or set true), restore a
-# [build-system] (hatchling) + [project.scripts] + [tool.hatch.build.targets.wheel] packages.
-package = false
-
-# Once agent_server/ + scripts/ land (WS1, from the template), add:
-# [project.scripts]
-# quickstart    = "scripts.quickstart:main"
-# start-app     = "scripts.start_app:main"
-# start-server  = "agent_server.start_server:main"
-# agent-evaluate = "agent_server.evaluate_agent:evaluate"
-# discover-tools = "scripts.discover_tools:main"

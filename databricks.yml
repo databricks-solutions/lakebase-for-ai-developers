@@ -1,21 +1,30 @@
 # Databricks Asset Bundle (DABs) for the Supply-Chain Planner Copilot.
 #
-# SCAFFOLD ONLY — resources are intentionally left as empty placeholders. WS1 (Alex & Kylie)
-# fills these in once Lakebase / the MLflow experiment are provisioned. Use the reference
-# template's databricks.yml as the source of truth for the App resource shape, env wiring, and
-# resource permissions:
+# Shape mirrors the reference template's bundle:
 #   https://github.com/databricks/app-templates/blob/main/agent-langgraph-advanced/databricks.yml
 #
-# Carve-out: the Genie space is NOT a clean DABs resource — create it manually (Genie Code /
-# isaac + skills) and reference it as an app resource once it exists.
+# Carve-out: the Genie space is NOT a clean DABs resource — it is created manually
+# (data/genie/02_create_genie_space.py) and referenced by id via GENIE_SPACE_ID.
 #
 # Deploy (always pass the workspace profile):
-#   databricks bundle validate --profile <profile>
-#   databricks bundle deploy   --profile <profile> -t dev
-#   databricks bundle run supply_chain_planner --profile <profile>
+#   databricks bundle validate --profile mfg-sc-agent
+#   databricks bundle deploy   --profile mfg-sc-agent -t dev
+#   databricks bundle run supply_chain_planner --profile mfg-sc-agent
 
 bundle:
   name: supply_chain_planner
+
+variables:
+  # Lakebase autoscaling coordinates (project/branch own the `primary` endpoint).
+  lakebase_branch:
+    description: Lakebase branch resource the App connects to.
+    default: projects/mfg-supply-chain-copilot/branches/production
+  lakebase_database:
+    description: Lakebase Postgres database name.
+    default: databricks_postgres
+  genie_space_id:
+    description: Manually-created Genie space id (carve-out — not a DABs resource).
+    default: "01f16128125d1d11897c8267c4e27be2"
 
 resources:
   apps:
@@ -23,41 +32,70 @@ resources:
       name: "supply-chain-planner"
       description: "Multi-agent supply-chain planner copilot — LangGraph on Apps, Lakebase state, MLflow tracing"
       source_code_path: ./
-      # config:
-      #   command: ["uv", "run", "start-app"]
-      #   env:
-      #     - name: MLFLOW_TRACKING_URI
-      #       value: "databricks"
-      #     - name: MLFLOW_REGISTRY_URI
-      #       value: "databricks-uc"
-      #     - name: MLFLOW_EXPERIMENT_ID
-      #       value_from: "experiment"
-      #     - name: LAKEBASE_AUTOSCALING_ENDPOINT
-      #       value_from: "postgres"
-      #     - name: LAKEBASE_AGENT_MEMORY_SCHEMA
-      #       value: "supply_chain_planner_memory"
-      #     - name: DATABRICKS_EMBEDDING_ENDPOINT
-      #       value: "databricks-gte-large-en"
-      #     - name: CHAT_APP_PORT
-      #       value: "3000"
-      #     - name: CHAT_PROXY_TIMEOUT_SECONDS
-      #       value: "300"
-      #
-      # # Resources this app can access (fill in real IDs):
-      # resources:
-      #   - name: 'experiment'
-      #     experiment:
-      #       experiment_id: ""
-      #       permission: 'CAN_MANAGE'
-      #   - name: 'postgres'
-      #     postgres:
-      #       branch: "<your-lakebase-branch>"
-      #       database: "<your-lakebase-database>"
-      #       permission: 'CAN_CONNECT_AND_CREATE'
+      config:
+        # P0: start-server runs the agent server (FastAPI + run/poll/resume + chat proxy).
+        # Slice 4 repoints start-app at a launcher that also boots the Next.js frontend.
+        command: ["uv", "run", "start-server"]
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "databricks"
+          - name: MLFLOW_REGISTRY_URI
+            value: "databricks-uc"
+          - name: MLFLOW_EXPERIMENT_ID
+            value_from: "experiment"
+          # Lakebase: the `postgres` resource resolves to the autoscaling endpoint name.
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value_from: "postgres"
+          - name: LAKEBASE_AUTOSCALING_PROJECT
+            value: "mfg-supply-chain-copilot"
+          - name: LAKEBASE_AUTOSCALING_BRANCH
+            value: "production"
+          - name: LAKEBASE_DATABASE
+            value: "databricks_postgres"
+          - name: LAKEBASE_AGENT_MEMORY_SCHEMA
+            value: "supply_chain_planner_memory"
+          - name: LAKEBASE_OPERATIONAL_SCHEMA
+            value: "public"
+          - name: DATABRICKS_EMBEDDING_ENDPOINT
+            value: "databricks-gte-large-en"
+          # Analytics agent (Genie) + operational catalog/schema.
+          - name: GENIE_SPACE_ID
+            value: "01f16128125d1d11897c8267c4e27be2"
+          - name: UC_CATALOG
+            value: "serverless_stable_yau46e_catalog"
+          - name: UC_SCHEMA
+            value: "planner"
+          # Single inference model for v1 (router/retrieval/planner).
+          - name: LLM_ROUTER_ENDPOINT
+            value: "databricks-claude-opus-4-8"
+          - name: LLM_RETRIEVAL_ENDPOINT
+            value: "databricks-claude-opus-4-8"
+          - name: LLM_PLANNER_ENDPOINT
+            value: "databricks-claude-opus-4-8"
+          - name: CHAT_APP_PORT
+            value: "3000"
+          - name: CHAT_PROXY_TIMEOUT_SECONDS
+            value: "300"
+          - name: LOG_LEVEL
+            value: "INFO"
 
-  # Setup / seed job — WS1/WS4. Seeds the Acme demo dataset (suppliers, inventory,
-  # purchase_orders, supplier_status, incidents) + pgvector tables/indexes. Fill in once the
-  # seed notebook/script exists.
+      # Resources this App's service principal can access.
+      resources:
+        - name: 'experiment'
+          experiment:
+            # dev: the per-user experiment auto-created by the agent at first run.
+            # Re-point or blank-then-deploy to provision a fresh one per target.
+            experiment_id: "1699732530746200"
+            permission: 'CAN_MANAGE'
+        - name: 'postgres'
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database}
+            permission: 'CAN_CONNECT_AND_CREATE'
+
+  # Setup / seed job — provisions the demo dataset (operational tables + pgvector + Synced
+  # Tables + Genie schema). Task wiring lands in Slice 4 (serverless Python tasks over the
+  # data/ scripts); kept as a named placeholder so the bundle validates today.
   # jobs:
   #   setup_and_seed:
   #     name: "supply-chain-planner-setup-and-seed"
@@ -67,14 +105,14 @@ targets:
   dev:
     mode: development
     default: true
-    # workspace:
-    #   host: https://<your-workspace>.cloud.databricks.com
+    workspace:
+      host: https://fevm-serverless-stable-yau46e.cloud.databricks.com
 
   demo:
     mode: production
-    # workspace:
-    #   host: https://<your-workspace>.cloud.databricks.com
-    # resources:
-    #   apps:
-    #     supply_chain_planner:
-    #       name: supply-chain-planner
+    workspace:
+      host: https://fevm-serverless-stable-yau46e.cloud.databricks.com
+    resources:
+      apps:
+        supply_chain_planner:
+          name: supply-chain-planner

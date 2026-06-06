@@ -43,7 +43,8 @@ def _llm_route(question: str) -> RouterDecision | None:
     except ImportError:
         return None
     try:
-        llm = ChatDatabricks(endpoint=settings.llm_router_endpoint, temperature=0)
+        # NB: no temperature — Opus-class reasoning models reject the param (BAD_REQUEST).
+        llm = ChatDatabricks(endpoint=settings.llm_router_endpoint)
         structured = llm.with_structured_output(RouterDecision)
         return structured.invoke(
             [{"role": "system", "content": _SYSTEM_PROMPT},

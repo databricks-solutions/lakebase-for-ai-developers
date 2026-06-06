@@ -1,58 +1,148 @@
-"""Planner + gate.
+"""Planner + gate + HITL + commit.
 
-P0 stub: produces a deterministic PlannerRecommendation from whatever gather results are
-on state. WS4 owns the real implementation (LLM call against the strong planner endpoint,
-threshold logic, cost estimation). The gate flips `needs_approval` based on a simple
-cost heuristic so the HITL interrupt path is exercised end-to-end.
+- `planner_node`: an LLM (strong planner endpoint) composes a `PlannerRecommendation` from the
+  gather results — summary, ordered actions, an estimated cost, reasoning. Citations are collected
+  deterministically from the gather results (never hallucinated), and `needs_approval` is decided
+  deterministically by the gate threshold (not the LLM) so the escalation is reliable. Falls back
+  to a deterministic compose if the LLM/endpoint is unavailable, so the graph stays runnable offline.
+- `gate_router`: routes to HITL when approval is required, else straight to commit.
+- `hitl_review_node`: a real `interrupt()` — the run pauses durably on the checkpoint, surfacing the
+  recommendation as an approval card; it resumes when the app injects an HITLDecision via
+  `Command(resume=...)`.
+- `commit_node`: P0 long-term memory is write-back-only — persist the verdict to the Lakebase store
+  (no hydrate-and-use yet).
 """
 
 from __future__ import annotations
 
-from agent_server.contracts import PlannerRecommendation
+import logging
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.types import interrupt
+from pydantic import BaseModel, Field
+
+from agent_server.config import settings
+from agent_server.contracts import HITLDecision, HITLVerdict, PlannerRecommendation
 from agent_server.graph.state import AgentState
 
+logger = logging.getLogger(__name__)
 
-# Above this threshold the gate trips and routes to HITL approval. WS4 will refine.
+# Above this estimated cost the gate trips and routes to HITL approval.
 APPROVAL_COST_THRESHOLD_USD = 50_000.0
+
+_SYSTEM_PROMPT = """\
+You are the planner for a supply-chain planning copilot. Given a planner's question and the
+evidence gathered by retrieval/analytics/operational agents, produce a concise, actionable
+recommendation.
+
+Return fields:
+- summary: one-line recommendation a planner can act on.
+- actions: 1-5 concrete, ordered steps (e.g. "Expedite a 200-unit reorder of SKU-1001 from an
+  alternate supplier").
+- est_cost_usd: your best dollar estimate of executing the recommended actions (reorder /
+  expedite / re-source cost). If you genuinely cannot estimate, return null.
+- reasoning: 1-3 sentences justifying the recommendation from the evidence.
+
+Be specific and ground every claim in the provided evidence. Do not invent SKUs, suppliers, or numbers."""
+
+
+class _PlannerDraft(BaseModel):
+    """LLM-authored portion of the recommendation. `needs_approval` + `citations` are set by code."""
+
+    summary: str
+    actions: list[str] = Field(default_factory=list)
+    est_cost_usd: float | None = None
+    reasoning: str | None = None
+
+
+def _collect_citations(state: AgentState) -> list[str]:
+    """Citations come from the gather results, not the LLM (traceability/scoring)."""
+    citations: list[str] = []
+    if (kr := state.get("knowledge_result")) and kr.passages:
+        citations += [p.source for p in kr.passages[:3]]
+    if (ar := state.get("analytics_result")) and ar.sql:
+        citations.append(f"analytics-sql:{hash(ar.sql) % 10_000:04d}")
+    if (or_ := state.get("operational_result")) and or_.sql:
+        citations.append(f"operational-sql:{hash(or_.sql) % 10_000:04d}")
+    return citations
+
+
+def _evidence_block(state: AgentState) -> str:
+    """Render the gather results into a compact prompt context."""
+    parts: list[str] = []
+    if (or_ := state.get("operational_result")) and or_.rows:
+        lines = [
+            f"  - {r.supplier_id}/{r.sku} (sim={r.similarity}): {r.summary} "
+            f"[on_hand={r.on_hand_qty}, open_po={r.open_po_qty}]"
+            for r in or_.rows[:5]
+        ]
+        parts.append("Operational matches (similar quality issues + live inventory/POs):\n" + "\n".join(lines))
+    if (ar := state.get("analytics_result")) and ar.rows:
+        parts.append(f"Analytics ({ar.answer or 'rows'}):\n  " + "\n  ".join(str(r) for r in ar.rows[:8]))
+    if (kr := state.get("knowledge_result")) and kr.passages:
+        lines = [f"  - [{p.source}] {(p.content or '')[:160]}" for p in kr.passages[:4]]
+        parts.append("Knowledge passages:\n" + "\n".join(lines))
+    return "\n\n".join(parts) if parts else "No gather results were returned."
+
+
+def _llm_draft(question: str, evidence: str) -> _PlannerDraft | None:
+    """Try the LLM planner. Returns None on any failure so the caller can fall back."""
+    try:
+        from databricks_langchain import ChatDatabricks
+    except ImportError:
+        return None
+    try:
+        # NB: no temperature — Opus-class reasoning models reject the param (BAD_REQUEST).
+        llm = ChatDatabricks(endpoint=settings.llm_planner_endpoint)
+        structured = llm.with_structured_output(_PlannerDraft)
+        return structured.invoke(
+            [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": f"Question:\n{question}\n\nEvidence:\n{evidence}"},
+            ]
+        )
+    except Exception as exc:
+        logger.warning("Planner LLM unavailable, falling back to deterministic compose: %s", exc)
+        return None
+
+
+def _fallback_draft(state: AgentState, question: str) -> _PlannerDraft:
+    counts = []
+    if (kr := state.get("knowledge_result")) and kr.passages:
+        counts.append(f"{len(kr.passages)} passages")
+    if (ar := state.get("analytics_result")) and ar.rows:
+        counts.append(f"{len(ar.rows)} analytics rows")
+    if (or_ := state.get("operational_result")) and or_.rows:
+        counts.append(f"{len(or_.rows)} operational matches")
+    return _PlannerDraft(
+        summary="Recommendation (deterministic compose) — " + (", ".join(counts) or "no gather results"),
+        actions=["Review the matched operational cases and confirm scope before proceeding."],
+        est_cost_usd=None,
+        reasoning="LLM planner unavailable; composed from gather results.",
+    )
 
 
 def planner_node(state: AgentState) -> dict:
-    """Compose a recommendation. Real impl lands in WS4."""
-    citations: list[str] = []
-    actions: list[str] = []
-    summary_parts: list[str] = []
+    """Compose a recommendation via the planner LLM (with deterministic gate + citations)."""
+    question = state.get("question", "")
+    evidence = _evidence_block(state)
+    draft = _llm_draft(question, evidence) or _fallback_draft(state, question)
 
-    if (kr := state.get("knowledge_result")) and kr.passages:
-        citations += [p.source for p in kr.passages[:3]]
-        summary_parts.append(f"{len(kr.passages)} relevant passages")
-    if (ar := state.get("analytics_result")) and ar.rows:
-        if ar.sql:
-            citations.append(f"analytics-sql:{hash(ar.sql) % 10_000:04d}")
-        summary_parts.append(f"{len(ar.rows)} analytics rows")
-    if (or_ := state.get("operational_result")) and or_.rows:
-        summary_parts.append(f"{len(or_.rows)} operational matches")
-        actions.append("Review the matched operational cases for similarity to live SKUs.")
+    # Deterministic gate: unknown cost OR over threshold ⇒ require human approval.
+    needs_approval = draft.est_cost_usd is None or draft.est_cost_usd >= APPROVAL_COST_THRESHOLD_USD
 
-    summary = (
-        "STUB recommendation — " + ", ".join(summary_parts)
-        if summary_parts
-        else "STUB recommendation — no gather results returned."
-    )
-    if not actions:
-        actions = ["Confirm scope with the planner before proceeding."]
-
-    est_cost = 75_000.0  # stub — WS4 derives from the actions
     rec = PlannerRecommendation(
-        summary=summary,
-        actions=actions,
-        needs_approval=est_cost >= APPROVAL_COST_THRESHOLD_USD,
-        est_cost_usd=est_cost,
-        reasoning="P0 stub planner: deterministic compose from gather results.",
-        citations=citations,
+        summary=draft.summary,
+        actions=draft.actions or ["Confirm scope with the planner before proceeding."],
+        needs_approval=needs_approval,
+        est_cost_usd=draft.est_cost_usd,
+        reasoning=draft.reasoning,
+        citations=_collect_citations(state),
     )
 
+    cost = f"${rec.est_cost_usd:,.0f}" if rec.est_cost_usd is not None else "unknown"
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, f"planner → needs_approval={rec.needs_approval} (est ${rec.est_cost_usd:,.0f})"]
+    notes = [*notes, f"planner → needs_approval={rec.needs_approval} (est {cost})"]
     return {"recommendation": rec, "trace_notes": notes}
 
 
@@ -65,24 +155,67 @@ def gate_router(state: AgentState) -> str:
 
 
 def hitl_review_node(state: AgentState) -> dict:
-    """P0 stub HITL node — autoapprove. Real `interrupt()` lands when WS1 wires the
-    checkpointer (the durable pause is meaningless without a checkpointer)."""
-    from agent_server.contracts import HITLDecision, HITLVerdict
+    """Real HITL: pause durably with `interrupt()`, surfacing the recommendation as an approval
+    card. Resumes when the app injects an HITLDecision via `Command(resume=...)`."""
+    rec = state.get("recommendation")
+    resume_value = interrupt(
+        {
+            "type": "approval_request",
+            "recommendation": rec.model_dump() if rec else None,
+            "prompt": "Approve or reject this recommendation.",
+        }
+    )
+
+    # `resume_value` is whatever the app passed to Command(resume=...): an HITLDecision dict.
+    decision = _coerce_decision(resume_value, state.get("user_id", "unknown"))
+    notes = state.get("trace_notes", []) or []
+    notes = [*notes, f"hitl_review → {decision.verdict.value} by {decision.user_id}"]
+    return {"hitl_decision": decision, "trace_notes": notes}
+
+
+def _coerce_decision(resume_value, user_id: str) -> HITLDecision:
+    if isinstance(resume_value, HITLDecision):
+        return resume_value
+    if isinstance(resume_value, dict):
+        return HITLDecision(
+            verdict=HITLVerdict(resume_value.get("verdict", "approved")),
+            note=resume_value.get("note"),
+            user_id=resume_value.get("user_id") or user_id,
+        )
+    # Fallback for a bare verdict string or unexpected shape.
+    try:
+        return HITLDecision(verdict=HITLVerdict(str(resume_value)), user_id=user_id)
+    except ValueError:
+        return HITLDecision(verdict=HITLVerdict.APPROVED, note="defaulted", user_id=user_id)
+
+
+async def commit_node(state: AgentState, config: RunnableConfig) -> dict:
+    """Finalize. P0 long-term memory is write-back-only: persist the verdict to the Lakebase
+    store (hydrate-and-use is parked). No-op if no store is configured (offline tests)."""
+    decision = state.get("hitl_decision")
+    rec = state.get("recommendation")
+    user_id = state.get("user_id", "unknown")
+
+    configurable = config.get("configurable", {}) if config else {}
+    store = configurable.get("store")
+    thread_id = configurable.get("thread_id", "unknown")
+
+    persisted = False
+    if store is not None:
+        try:
+            namespace = ("approvals", user_id.replace(".", "-"))
+            value = {
+                "question": state.get("question"),
+                "recommendation": rec.model_dump() if rec else None,
+                "verdict": decision.verdict.value if decision else None,
+                "note": decision.note if decision else None,
+            }
+            await store.aput(namespace, thread_id, value)
+            persisted = True
+        except Exception as exc:  # never fail the run on a memory write
+            logger.warning("Commit write-back to store failed: %s", exc)
 
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, "hitl_review → auto-approved (STUB; real interrupt() lands with checkpointer)"]
-    return {
-        "hitl_decision": HITLDecision(
-            verdict=HITLVerdict.APPROVED,
-            note="auto-approved by P0 stub",
-            user_id=state.get("user_id", "unknown"),
-        ),
-        "trace_notes": notes,
-    }
-
-
-def commit_node(state: AgentState) -> dict:
-    """Final node — would write the decision to durable storage. P0 stub: trace only."""
-    notes = state.get("trace_notes", []) or []
-    notes = [*notes, "commit → recommendation finalized (STUB; long-term store wired in P1)"]
+    notes = [*notes, f"commit → finalized (verdict={decision.verdict.value if decision else 'n/a'}, "
+                     f"store_write={'ok' if persisted else 'skipped'})"]
     return {"trace_notes": notes}
