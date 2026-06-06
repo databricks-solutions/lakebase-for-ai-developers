@@ -14,7 +14,6 @@ import os
 
 from agent_server.contracts import (
     GenieResult,
-    KnowledgeQuery,
     KnowledgeResult,
     OperationalResult,
 )

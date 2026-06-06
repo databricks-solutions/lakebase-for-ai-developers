@@ -210,6 +210,10 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# MLflow — local sqlite store created if a script runs without MLFLOW_TRACKING_URI=databricks
+mlflow.db
+mlruns/
+
 # PyPI configuration file
 .pypirc
 
