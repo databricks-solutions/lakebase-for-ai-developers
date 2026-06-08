@@ -230,7 +230,14 @@ async def stream_handler(
             text = _final_text(state, interrupt_payload)
             item = create_text_output_item(text=text, id=uuid.uuid4().hex)
             item["status"] = "completed"
-            yield ResponsesAgentStreamEvent(type="response.output_item.done", item=item)
+            # Carry the same structured payload the /invocations path returns (route,
+            # recommendation, approval_request, status) on the final stream event so the UI can
+            # render the HITL approval card from a streamed run — not just the assistant text.
+            yield ResponsesAgentStreamEvent(
+                type="response.output_item.done",
+                item=item,
+                custom_outputs=_custom_outputs(state, interrupt_payload),
+            )
     except Exception as e:
         if any(k in str(e).lower() for k in _LAKEBASE_ERROR_KEYWORDS):
             logger.error("Lakebase access error: %s", e)
