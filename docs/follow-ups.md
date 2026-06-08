@@ -51,13 +51,40 @@ works today (verified across a server restart). Before a future LangGraph upgrad
 modules in the checkpointer's serde `allowed_msgpack_modules` (requires passing a custom serde into
 the `databricks_langchain` `AsyncCheckpointSaver`).
 
-## 4. Operational rows need Synced Tables provisioning
+## 4. Operational rows need Synced Tables provisioning  *(DONE — except the deploy-time App-SP grant)*
 
-`agent_server/tools/operational_tool.py` runs the validated hybrid SQL, but the 6 Synced Tables
-(`inventory_current`, `open_pos`, `user_access`, …) aren't provisioned on the autoscaling
-`production` branch. Register a Lakebase UC catalog (`databricks postgres create-catalog`), set
-`LAKEBASE_UC_CATALOG`, run `data/operational/03_sync_to_lakebase.py`, grant SELECT, then verify the
-hero-scenario assertions. Unblocks the full Acme demo (Slice 4) and the operational-SQL scorer.
+**Done (2026-06-08).** Provisioned the full Lakebase operational layer on the autoscaling
+`production` branch and verified the hero scenario end-to-end on real data:
+- Registered the Lakebase UC catalog `mfg_supply_chain_lakebase`
+  (`databricks postgres create-catalog ... branch=projects/mfg-supply-chain-copilot/branches/production`)
+  and set `LAKEBASE_UC_CATALOG` in `.env`.
+- Seeded the native pgvector `quality_incidents` table (`02_pre_seed_pgvector.py`): 24 rows
+  (23 active), 1024-dim embeddings, HNSW cosine index.
+- Created the 6 Synced Tables (`03_sync_to_lakebase.py`) — all ONLINE. The two live tables
+  (`inventory_current`, `open_pos`) follow `LAKEBASE_SYNC_MODE` (default **SNAPSHOT** — one-time
+  copy, idle after, no always-on DLT pipeline cost; flip to **CONTINUOUS** + re-run `03` for a
+  live-update demo). The 4 dims (`suppliers`, `product_dim`, `supplier_status`, `user_access`) are
+  always SNAPSHOT. `03` reconciles mode changes by delete+recreate (no in-place policy update).
+- `04_verify_hybrid_query.py` passes: in-scope `alex.miller` → hero Henkel `SUP-001`/`SKU-1001`,
+  on_hand 40 / open_po 500, SUPERSEDED filtered; out-of-scope `planner.bob` → no adhesive rows.
+- Graph runs end-to-end on the real operational path (real demo identity → 5 real rows + hybrid
+  SQL in state; HITL interrupt fires; resume → commit).
+
+**Fixed along the way.** `agent_server/tools/operational_tool.py` assumed tuple cursor rows, but
+the app's `LakebasePool` cursor yields **mapping** rows — `dict(zip(cols, record))` mapped each
+column name to a dict *key*. Now uses the record directly when it's a `Mapping`. `04` didn't catch
+it because it connects via `data/operational/_lakebase.connect()` (plain tuple rows).
+
+**Remaining (deploy-time only).** When the App is deployed (#6), grant its service principal read
+access on the operational schema — printed by `03`:
+`GRANT USAGE ON SCHEMA public TO "<app-sp-client-id>"; GRANT SELECT ON ALL TABLES IN SCHEMA public
+TO "<app-sp-client-id>";` plus `ALTER DEFAULT PRIVILEGES`. Not needed locally (the connecting
+user owns the objects).
+
+**Note (smoke gotcha).** `agent_server/graph/_smoke.py` hardcodes `user_id="smoke@example.com"`,
+which has no `user_access` scope → the real operational query returns 0 rows and the planner
+confabulates. Use a real in-scope identity (`alex.miller@databricks.com` or `DEMO_PLANNER_USER`)
+to exercise the real operational path; consider parameterizing the smoke's user id.
 
 ## 5. MLflow eval harness auth (local U2M)
 

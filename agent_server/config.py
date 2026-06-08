@@ -14,7 +14,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _on_databricks() -> bool:
@@ -117,6 +117,19 @@ class Settings(BaseModel):
     # <lakebase_uc_catalog>.<lakebase_operational_schema>.<table>). One-time `databricks postgres
     # create-catalog` per project. The DLT pipeline metadata uses a regular UC catalog (uc_catalog).
     lakebase_uc_catalog: str | None = Field(default=None, alias="LAKEBASE_UC_CATALOG")
+    # Scheduling policy for the *live* operational synced tables (`inventory_current`, `open_pos`)
+    # in 03_sync_to_lakebase.py. SNAPSHOT (default) is a one-time copy that goes idle — cheap, and
+    # fine for the static seeded demo data. Flip to CONTINUOUS (a always-on DLT pipeline that
+    # streams CDF) only when a demo needs to show live updates. The dim tables are always SNAPSHOT.
+    lakebase_sync_mode: str = Field(default="SNAPSHOT", alias="LAKEBASE_SYNC_MODE")
+
+    @field_validator("lakebase_sync_mode")
+    @classmethod
+    def _validate_sync_mode(cls, v: str) -> str:
+        mode = (v or "SNAPSHOT").strip().upper()
+        if mode not in {"SNAPSHOT", "CONTINUOUS"}:
+            raise ValueError("LAKEBASE_SYNC_MODE must be SNAPSHOT or CONTINUOUS")
+        return mode
 
     # --- MLflow ---
     mlflow_experiment_id: str | None = Field(default=None, alias="MLFLOW_EXPERIMENT_ID")

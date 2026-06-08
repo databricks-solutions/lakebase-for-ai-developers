@@ -29,10 +29,16 @@ if REPO_ROOT not in sys.path:
 
 from agent_server.config import settings
 
+# The two LIVE operational tables follow the configurable LAKEBASE_SYNC_MODE — SNAPSHOT (default,
+# a one-time copy that goes idle: cheap, fine for the static seeded demo) or CONTINUOUS (an
+# always-on DLT pipeline streaming CDF, for a live-update demo). The dimension tables are always
+# SNAPSHOT. Re-running with a different LAKEBASE_SYNC_MODE flips the live tables (delete+recreate).
+_LIVE_MODE = settings.lakebase_sync_mode
+
 # (source_table, primary_key_columns, scheduling_policy)
 SYNC_SPECS = [
-    ("inventory_current", ["sku"], "CONTINUOUS"),
-    ("open_pos", ["supplier_id", "sku"], "CONTINUOUS"),
+    ("inventory_current", ["sku"], _LIVE_MODE),
+    ("open_pos", ["supplier_id", "sku"], _LIVE_MODE),
     ("suppliers", ["supplier_id"], "SNAPSHOT"),
     ("product_dim", ["sku"], "SNAPSHOT"),
     ("supplier_status", ["supplier_id", "last_updated"], "SNAPSHOT"),
@@ -57,6 +63,27 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(["databricks", *args, *_profile_flag()], capture_output=True, text=True)
 
 
+def _current_mode(get_stdout: str) -> str | None:
+    """Infer an existing synced table's policy from its detailed_state (the CLI doesn't echo the
+    scheduling_policy). CONTINUOUS streams (…CONTINUOUS_UPDATE); everything else is a SNAPSHOT-class
+    one-time/triggered copy."""
+    try:
+        state = json.loads(get_stdout).get("status", {}).get("detailed_state", "")
+    except (ValueError, AttributeError):
+        return None
+    return "CONTINUOUS" if "CONTINUOUS" in state else "SNAPSHOT"
+
+
+def _drop_pg_table(table: str, schema: str) -> None:
+    """Deleting a synced table leaves its read-only Postgres table behind; drop it so the recreate
+    in the new mode starts clean (DROP TABLE is the one mutation allowed on a synced pg table)."""
+    from data.operational._lakebase import connect
+
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(f"DROP TABLE IF EXISTS {schema}.{table}")
+        conn.commit()
+
+
 def main() -> None:
     lakebase_catalog = _require(settings.lakebase_uc_catalog, "LAKEBASE_UC_CATALOG")
     project = _require(settings.lakebase_autoscaling_project, "LAKEBASE_AUTOSCALING_PROJECT")
@@ -68,15 +95,28 @@ def main() -> None:
     print(f"Lakebase catalog : {lakebase_catalog}")
     print(f"Branch           : {branch}")
     print(f"Postgres schema  : {pg_schema}")
-    print(f"Source Delta      : {src_prefix}.*\n")
+    print(f"Source Delta      : {src_prefix}.*")
+    print(f"Live sync mode   : {_LIVE_MODE}  (LAKEBASE_SYNC_MODE — set CONTINUOUS for a live demo)\n")
 
     for table, pk, policy in SYNC_SPECS:
         target = f"{lakebase_catalog}.{pg_schema}.{table}"
-        # Idempotent: skip if the synced table already exists.
-        existing = _run(["postgres", "get-synced-table", f"synced_tables/{target}"])
+        full = f"synced_tables/{target}"
+        # Idempotent + mode-reconciling: skip if it already exists in the desired mode. If the mode
+        # differs (flipping inventory_current/open_pos SNAPSHOT↔CONTINUOUS) there is no
+        # update-synced-table for scheduling_policy, so delete + drop the orphaned pg table +
+        # recreate below.
+        existing = _run(["postgres", "get-synced-table", full])
         if existing.returncode == 0:
-            print(f"  ✓ exists, skipping: {target}\n")
-            continue
+            current = _current_mode(existing.stdout)
+            if current == policy:
+                print(f"  ✓ exists ({policy}), skipping: {target}\n")
+                continue
+            print(f"  ↻ {current or 'unknown'} → {policy}: deleting + recreating {target}")
+            deleted = _run(["postgres", "delete-synced-table", full])
+            if deleted.returncode != 0:
+                print(f"    ! delete failed: {deleted.stderr.strip()}\n")
+                continue
+            _drop_pg_table(table, pg_schema)
 
         spec = {
             "spec": {

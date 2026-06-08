@@ -14,6 +14,8 @@ swaps it for Postgres RLS on `current_user()` — same outcome, engine-enforced.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from langchain_core.tools import tool
 
 from agent_server.config import settings
@@ -51,7 +53,8 @@ def query_operational_impl(question: str, user_id: str) -> OperationalResult:
         cur.execute(HYBRID_SQL, {"q": qvec, "user_id": user_id})
         cols = [c.name for c in cur.description]
         for record in cur.fetchall():
-            r = dict(zip(cols, record))
+            # LakebasePool cursors yield mapping rows; plain cursors yield tuples — handle both.
+            r = record if isinstance(record, Mapping) else dict(zip(cols, record))
             rows.append(
                 OperationalRow(
                     sku=r.get("sku"),
