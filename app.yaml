@@ -1,0 +1,56 @@
+# Databricks Apps runtime manifest — used by `databricks apps deploy` (the non-DABs path).
+# The App runs the agent server (FastAPI + LangGraph in-process); agent_server/webapp.py serves
+# the built React SPA at /ui and the /api/* routes. Deps install from pyproject via uv.
+#
+# Values below target the SHARED yau46e workspace (Alex's seeded data). Auth is ambient (the app
+# service principal); OBO user identity arrives via X-Forwarded-* headers automatically.
+# NOTE: the app service principal needs Lakebase + UC grants — see scripts/deploy_app_yau46e.sh.
+
+command:
+  - "uv"
+  - "run"
+  - "start-server"
+
+env:
+  - name: MLFLOW_TRACKING_URI
+    value: "databricks"
+  - name: MLFLOW_REGISTRY_URI
+    value: "databricks-uc"
+
+  # Lakebase (autoscaling) — the app SP mints OAuth DB creds from these coords.
+  - name: LAKEBASE_AUTOSCALING_PROJECT
+    value: "mfg-supply-chain-copilot"
+  - name: LAKEBASE_AUTOSCALING_BRANCH
+    value: "production"
+  - name: LAKEBASE_AUTOSCALING_ENDPOINT
+    value: "primary"
+  - name: LAKEBASE_DATABASE
+    value: "databricks_postgres"
+  # Distinct memory schema so the app SP owns it (created at startup; grant CREATE first).
+  - name: LAKEBASE_AGENT_MEMORY_SCHEMA
+    value: "supply_chain_planner_memory_app"
+  - name: LAKEBASE_OPERATIONAL_SCHEMA
+    value: "public"
+  - name: LAKEBASE_UC_CATALOG
+    value: "mfg_supply_chain_lakebase"
+
+  # Unity Catalog (Genie + operational Delta source) — Alex's seeded data on yau46e.
+  - name: UC_CATALOG
+    value: "serverless_stable_yau46e_catalog"
+  - name: UC_SCHEMA
+    value: "planner"
+  - name: GENIE_SPACE_ID
+    value: "01f16128125d1d11897c8267c4e27be2"
+  - name: DATABRICKS_EMBEDDING_ENDPOINT
+    value: "databricks-gte-large-en"
+
+  # Single inference model for v1.
+  - name: LLM_ROUTER_ENDPOINT
+    value: "databricks-claude-opus-4-8"
+  - name: LLM_RETRIEVAL_ENDPOINT
+    value: "databricks-claude-opus-4-8"
+  - name: LLM_PLANNER_ENDPOINT
+    value: "databricks-claude-opus-4-8"
+
+  - name: LOG_LEVEL
+    value: "INFO"
