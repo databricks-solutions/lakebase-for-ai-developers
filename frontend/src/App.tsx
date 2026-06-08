@@ -4,6 +4,8 @@ import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
 import { Sidebar } from "./components/Sidebar";
+import { TourProvider } from "./tour/TourProvider";
+import { TourButton } from "./tour/TourButton";
 import type { ChatMessage, Me, Session } from "./types";
 
 const newThreadId = () =>
@@ -57,25 +59,28 @@ export default function App() {
   );
 
   return (
-    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
-      <BlobBg />
-      <Sidebar
-        me={me}
-        sessions={sessions}
-        currentThread={thread}
-        onNew={() => setThread(newThreadId())}
-        onOpen={(t) => setThread(t)}
-      />
-      <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
-        <div style={{ display: "flex", justifyContent: "flex-end", padding: "var(--space-3) var(--space-5)", borderBottom: "1px solid var(--border)" }}>
-          <button onClick={() => setExplorerOpen(true)} style={inspectBtn}>⚙ Inspect backend</button>
-        </div>
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <ChatPanel messages={messages} busy={busy} onSend={onSend} />
-        </div>
-      </main>
-      <ExplorerDrawer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
-    </div>
+    <TourProvider>
+      <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
+        <BlobBg />
+        <Sidebar
+          me={me}
+          sessions={sessions}
+          currentThread={thread}
+          onNew={() => setThread(newThreadId())}
+          onOpen={(t) => setThread(t)}
+        />
+        <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "var(--space-3) var(--space-5)", borderBottom: "1px solid var(--border)" }}>
+            <TourButton tourId="overview" />
+            <button data-tour="inspect" onClick={() => setExplorerOpen(true)} style={inspectBtn}>⚙ Inspect backend</button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <ChatPanel messages={messages} busy={busy} onSend={onSend} />
+          </div>
+        </main>
+        <ExplorerDrawer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
+      </div>
+    </TourProvider>
   );
 }
 

@@ -39,7 +39,7 @@ export function Sidebar({
         <button onClick={onNew} style={newBtn}>+ New conversation</button>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 var(--space-3)" }}>
+      <div data-tour="history" style={{ flex: 1, overflowY: "auto", padding: "0 var(--space-3)" }}>
         <div className="eyebrow" style={{ color: "var(--fg-on-dark-2)", padding: "0 var(--space-2) var(--space-2)" }}>History</div>
         {sessions.length === 0 && (
           <p style={{ color: "var(--fg-on-dark-2)", fontSize: "var(--fs-body-sm)", padding: "0 var(--space-2)" }}>
@@ -66,7 +66,7 @@ export function Sidebar({
         })}
       </div>
 
-      <div style={{ borderTop: "1px solid var(--db-navy-700)", padding: "var(--space-4)" }}>
+      <div data-tour="identity" style={{ borderTop: "1px solid var(--db-navy-700)", padding: "var(--space-4)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 32, height: 32, borderRadius: "var(--radius-pill)", background: "var(--db-lava-600)", color: "#fff", display: "grid", placeItems: "center", fontWeight: 600 }}>
             {(me?.email ?? "?").slice(0, 1).toUpperCase()}

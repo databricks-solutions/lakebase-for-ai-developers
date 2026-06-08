@@ -47,7 +47,7 @@ export function ChatPanel({
 
       <div style={{ borderTop: "1px solid var(--border)", background: "rgba(249,247,244,0.85)", backdropFilter: "blur(6px)", padding: "var(--space-4) var(--space-5)" }}>
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-end", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-xl)", background: "var(--bg-canvas)", padding: 8, boxShadow: "var(--shadow-sm)" }}>
+          <div data-tour="composer" style={{ display: "flex", gap: 10, alignItems: "flex-end", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-xl)", background: "var(--bg-canvas)", padding: 8, boxShadow: "var(--shadow-sm)" }}>
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -81,7 +81,7 @@ function Welcome({ onPick }: { onPick: (s: string) => void }) {
         Ask about supplier risk, quality issues, inventory and open POs. I route across pgvector,
         Genie and Vector Search, then propose an action for your approval.
       </p>
-      <div style={{ display: "grid", gap: 10, maxWidth: 620, margin: "0 auto" }}>
+      <div data-tour="suggestions" style={{ display: "grid", gap: 10, maxWidth: 620, margin: "0 auto" }}>
         {SUGGESTIONS.map((s) => (
           <button key={s} onClick={() => onPick(s)} style={suggestionBtn}>{s}</button>
         ))}
