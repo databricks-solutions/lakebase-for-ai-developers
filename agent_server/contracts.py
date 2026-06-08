@@ -110,7 +110,8 @@ class RouterDecision(BaseModel):
 class PlannerRecommendation(BaseModel):
     summary: str  # one-line recommendation
     actions: list[str]  # ordered steps the planner proposes
-    needs_approval: bool
+    needs_approval: bool  # gate verdict (set by code, not the LLM)
+    is_action_bearing: bool = True  # commits spend / risky-irreversible vs purely informational
     est_cost_usd: float | None = None
     reasoning: str | None = None
     citations: list[str] = Field(default_factory=list)  # source paths / SQL refs

@@ -128,6 +128,7 @@ def run_agent(query: str) -> dict:
         "summary": rec.summary if rec else None,
         "actions": rec.actions if rec else [],
         "needs_approval": rec.needs_approval if rec else None,
+        "is_action_bearing": rec.is_action_bearing if rec else None,
         "est_cost_usd": rec.est_cost_usd if rec else None,
         "evidence": _evidence_summary(state),
     }

@@ -24,10 +24,39 @@ from typing import Optional, Tuple
 
 from databricks.sdk import WorkspaceClient
 from databricks_langchain import AsyncCheckpointSaver, AsyncDatabricksStore
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from agent_server import contracts
 from agent_server.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Contract Pydantic types/enums that land in the checkpointed AgentState. LangGraph's msgpack serde
+# is permissive today but warns ("Deserializing unregistered type …") and will block unregistered
+# types under a future LANGGRAPH_STRICT_MSGPACK default. We register them explicitly so resume keeps
+# working forward-compatibly and the warning goes away. databricks_langchain.AsyncCheckpointSaver
+# does not forward a `serde` kwarg, so we set checkpointer.serde after construction.
+_CHECKPOINT_CONTRACT_TYPES = (
+    contracts.RouterDecision,
+    contracts.KnowledgeResult,
+    contracts.KnowledgePassage,
+    contracts.GenieResult,
+    contracts.OperationalResult,
+    contracts.OperationalRow,
+    contracts.PlannerRecommendation,
+    contracts.HITLDecision,
+    contracts.HITLVerdict,
+    contracts.DocType,
+)
+
+
+def _contract_aware_serde() -> JsonPlusSerializer:
+    """A JsonPlusSerializer that explicitly allows the contract types in the checkpoint."""
+    return JsonPlusSerializer(
+        allowed_msgpack_modules=[
+            (t.__module__, t.__name__) for t in _CHECKPOINT_CONTRACT_TYPES
+        ]
+    )
 
 # Long-lived resources opened once at app startup (start_server.py lifespan) and reused
 # across requests. Falls back to a per-call context when unset (e.g. eval / smoke scripts).
@@ -183,6 +212,8 @@ async def lakebase_context(config: LakebaseConfig):
         embedding_dims=config.embedding_dims,
         schema=config.memory_schema,
     ) as store:
+        # Register the contract types so resume is forward-compatible (see _contract_aware_serde).
+        checkpointer.serde = _contract_aware_serde()
         yield checkpointer, store
 
 

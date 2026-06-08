@@ -39,8 +39,13 @@ Return fields:
 - summary: one-line recommendation a planner can act on.
 - actions: 1-5 concrete, ordered steps (e.g. "Expedite a 200-unit reorder of SKU-1001 from an
   alternate supplier").
-- est_cost_usd: your best dollar estimate of executing the recommended actions (reorder /
-  expedite / re-source cost). If you genuinely cannot estimate, return null.
+- is_action_bearing: true if the recommendation COMMITS SPEND or is RISKY/IRREVERSIBLE — it tells
+  the planner to reorder, expedite, re-source, pre-buy, quarantine, or hold. false for purely
+  INFORMATIONAL answers that only report/look up/aggregate (counts, totals, status, "which
+  suppliers are at risk", "what do the contracts say"). When in doubt, prefer true.
+- est_cost_usd: your best dollar estimate of executing the recommended actions (reorder / expedite
+  / re-source cost). Return 0 for a purely informational answer (no spend committed). Only return
+  null if it is action-bearing but you genuinely cannot estimate.
 - reasoning: 1-3 sentences justifying the recommendation from the evidence.
 
 Be specific and ground every claim in the provided evidence. Do not invent SKUs, suppliers, or numbers."""
@@ -51,6 +56,7 @@ class _PlannerDraft(BaseModel):
 
     summary: str
     actions: list[str] = Field(default_factory=list)
+    is_action_bearing: bool = True  # commits spend / risky-irreversible vs purely informational
     est_cost_usd: float | None = None
     reasoning: str | None = None
 
@@ -128,13 +134,20 @@ def planner_node(state: AgentState) -> dict:
     evidence = _evidence_block(state)
     draft = _llm_draft(question, evidence) or _fallback_draft(state, question)
 
-    # Deterministic gate: unknown cost OR over threshold ⇒ require human approval.
-    needs_approval = draft.est_cost_usd is None or draft.est_cost_usd >= APPROVAL_COST_THRESHOLD_USD
+    # Deterministic gate: a recommendation needs human approval when it COMMITS SPEND / is
+    # risky-irreversible (is_action_bearing), OR when a known cost clears the threshold. Purely
+    # informational answers (is_action_bearing=False, cost 0/None) are NOT gated — this is the
+    # fix for over-escalation, where an unknown cost alone used to force approval on every run.
+    over_threshold = (
+        draft.est_cost_usd is not None and draft.est_cost_usd >= APPROVAL_COST_THRESHOLD_USD
+    )
+    needs_approval = draft.is_action_bearing or over_threshold
 
     rec = PlannerRecommendation(
         summary=draft.summary,
         actions=draft.actions or ["Confirm scope with the planner before proceeding."],
         needs_approval=needs_approval,
+        is_action_bearing=draft.is_action_bearing,
         est_cost_usd=draft.est_cost_usd,
         reasoning=draft.reasoning,
         citations=_collect_citations(state),
@@ -142,7 +155,11 @@ def planner_node(state: AgentState) -> dict:
 
     cost = f"${rec.est_cost_usd:,.0f}" if rec.est_cost_usd is not None else "unknown"
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, f"planner → needs_approval={rec.needs_approval} (est {cost})"]
+    notes = [
+        *notes,
+        f"planner → needs_approval={rec.needs_approval} "
+        f"(action_bearing={rec.is_action_bearing}, est {cost})",
+    ]
     return {"recommendation": rec, "trace_notes": notes}
 
 
