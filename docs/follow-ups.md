@@ -10,10 +10,11 @@ recommendation commits spend / is risky-irreversible vs purely informational (an
 `est_cost_usd=0` for informational answers). The gate is now
 `needs_approval = is_action_bearing or (est_cost_usd is not None and est_cost_usd >= 50_000)`, so an
 unknown cost no longer force-escalates informational answers. `is_action_bearing` is on
-`_PlannerDraft` and `PlannerRecommendation` (visible in `custom_outputs` + the trace). Re-measured
-via `evaluate_direct`: **escalation_correctness 67% → 83% (5/6)**; the remaining miss is an
-ambiguous eval label (see "Eval harness gaps" below). Files: `agent_server/graph/planner.py`,
-`agent_server/contracts.py`, `agent_server/evaluate_agent.py` (surfaces `is_action_bearing`).
+`_PlannerDraft` and `PlannerRecommendation` (visible in `custom_outputs` + the trace). Measured by
+the new **deterministic `gate_correctness` scorer: 6/6 = 100%** (stable, no LLM); the LLM
+`escalation_correctness` judge — which had swung 4/6–6/6 run-to-run — also reads 6/6 after the eval
+record #1 rephrase. Files: `agent_server/graph/planner.py`, `agent_server/contracts.py`,
+`agent_server/evaluate_agent.py` (`gate_correctness` + `is_action_bearing` + labels).
 
 <details><summary>Original write-up</summary>
 
@@ -89,20 +90,22 @@ loads the checkpoint back through the serde). File: `agent_server/lakebase.py`
 Surfaced while verifying #1. The current eval (`agent_server/evaluate_agent.py`) is good enough to
 catch the over-escalation regression but is thin in places:
 
-1. **Ambiguous escalation label.** The record *"Show me similar past quality issues for Henkel …
-   joined to on-hand inventory and open POs"* is labeled `should_need_approval=True`, but it's
-   phrased as an informational **retrieval** ("show me …") with no explicit action — the planner
-   reasonably classifies it informational. This single arguable case caps `escalation_correctness`
-   at 83%. Fix: either rephrase the question to ask for a mitigation, or relabel it; and add an
-   explicit `expected_is_action_bearing` to each record.
+1. **Ambiguous escalation label.** ~~The record *"Show me similar past quality issues …"* is
+   labeled approval=True but phrased as an informational retrieval.~~ **DONE (2026-06-08):**
+   rephrased to ask for a recommendation (matching the canonical demo's "→ recommendation → gate"
+   flow), and added an explicit `expected_action_bearing` label to every record.
 2. **Stubbed gather masks routing/grounding quality.** The harness runs with `USE_STUBS=1`, so the
    stub gather returns fixed rows that don't match every question (e.g. "which suppliers are at
    risk?" → no risk data in the stub → `recommendation_grounded` and `routing_correctness` score
    "no" as **stub artifacts**, not real agent faults). Now that the operational + Genie data is
    provisioned, add a real-data eval mode (keep stubs only for fast CI).
-3. **No deterministic gate scorer.** `escalation_correctness` is an LLM judge (slow, nondeterministic
-   and itself U2M-auth-limited). Add a cheap deterministic scorer: `needs_approval` /
-   `is_action_bearing` vs the labeled expectation.
+3. **No deterministic gate scorer.** ~~`escalation_correctness` is an LLM judge (slow,
+   nondeterministic and itself U2M-auth-limited).~~ **DONE (2026-06-08):** added `gate_correctness`
+   — a deterministic (no-LLM) scorer comparing `is_action_bearing` to a per-record
+   `expected_action_bearing` label, wired into both `evaluate_direct` and the `evaluate()` harness.
+   Stable **6/6 = 100%**, vs the LLM `escalation_correctness` judge that swung 4/6–6/6 run-to-run.
+   Also rephrased eval record #1 (the ambiguous bare "show me …") to request a recommendation,
+   removing the borderline label (gap #1).
 4. **No operational-SQL-correctness scorer.** The architecture doc calls for scoring the hybrid
    operational SQL/result; not implemented. With real data provisioned, assert the hero-scenario
    rows (Henkel/SKU-1001, on_hand 40 / open_po 500, scope filtering).
