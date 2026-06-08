@@ -109,9 +109,9 @@ catch the over-escalation regression but is thin in places:
 4. **No operational-SQL-correctness scorer.** The architecture doc calls for scoring the hybrid
    operational SQL/result; not implemented. With real data provisioned, assert the hero-scenario
    rows (Henkel/SKU-1001, on_hand 40 / open_po 500, scope filtering).
-5. **Local trace round-trip limited (see #5).** `mlflow.genai.evaluate` (full harness) can't persist
-   assessments under the local U2M profile; `evaluate_direct` works around it but doesn't store
-   traces/assessments for review. Run the full harness on Databricks (ambient SP) or with a PAT.
+5. **Local full-harness persistence (see #5).** ~~Can't persist under U2M.~~ **DONE:** the full
+   `mlflow.genai.evaluate` harness now runs locally on the OAuth profile and persists assessments —
+   `_pin_oauth_token()` removes the concurrent CLI token-cache race that was causing the 401s.
 
 ## 4. Operational rows need Synced Tables provisioning  *(DONE — except the deploy-time App-SP grant)*
 
@@ -148,11 +148,21 @@ which has no `user_access` scope → the real operational query returns 0 rows a
 confabulates. Use a real in-scope identity (`alex.miller@databricks.com` or `DEMO_PLANNER_USER`)
 to exercise the real operational path; consider parameterizing the smoke's user id.
 
-## 5. MLflow eval harness auth (local U2M)
+## 5. MLflow eval harness auth (local U2M)  *(DONE — 2026-06-08; earlier diagnosis was wrong)*
 
-`mlflow.genai.evaluate` can't persist assessments locally on the U2M OAuth profile (workspace
-rejects the token type for trace/assessment artifact APIs). Use `evaluate_agent.evaluate_direct()`
-locally; run the full harness (`evaluate(--harness)`) on Databricks (ambient SP) or with a PAT.
+**Corrected.** The full harness *does* run locally on the U2M profile. The earlier `401: Credential
+was not sent` was **not** the artifact API rejecting the OAuth token type — it was a **concurrency
+race**: the agent fans out 3 gather nodes concurrently and the eval scores rows via a thread pool,
+so many threads shell out `databricks auth token --force-refresh` at once and corrupt the shared
+CLI token cache (`exit status 45`); a failed fetch then sends an un-credentialed request → 401.
+
+**Fix.** `agent_server/evaluate_agent.py:_pin_oauth_token()` mints the profile's OAuth token once and
+pins it as a static bearer (`DATABRICKS_HOST`/`DATABRICKS_TOKEN`, drops the profile so auth is `pat`,
+no per-call CLI subprocess), called at the top of `evaluate()` and `evaluate_direct()`. No-op on
+Databricks / when a token is already set. Verified: full real-data harness on the profile → 0
+races/401s, all judges persisted as per-row trace assessments, run in the Evaluation UI.
+(`MLFLOW_GENAI_EVAL_MAX_WORKERS=1` alone does NOT fix it — the race also fires within one prediction
+via the parallel gather nodes.)
 
 ## 6. Cloud deploy
 

@@ -36,6 +36,36 @@ from agent_server.graph.build_graph import build_graph  # noqa: E402
 mlflow.langchain.autolog()
 
 
+def _pin_oauth_token() -> None:
+    """Mint the profile's OAuth token ONCE and pin it as a static bearer for this process.
+
+    Why: the eval fans out the graph's three gather nodes concurrently *and* scores rows
+    concurrently. Under the `databricks-cli` auth provider each thread shells out
+    `databricks auth token --force-refresh`, and concurrent refreshes corrupt the shared CLI token
+    cache (`exit status 45`). A failed fetch then sends an un-credentialed request, so the trace /
+    LLM-judge APIs return `401: Credential was not sent`. Pinning a static bearer removes the
+    per-call subprocess entirely — it's still the profile's OAuth token, just fetched once (≈1h
+    lifetime, ample for an eval run). No-op on Databricks (ambient SP) or when a token is already
+    set. Keeps the eval on OAuth while making it concurrency-safe."""
+    if settings.on_databricks or os.environ.get("DATABRICKS_TOKEN"):
+        return
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    if not profile:
+        return
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        w = WorkspaceClient(profile=profile)
+        token = w.config.authenticate().get("Authorization", "").split(" ", 1)[-1]
+        if token:
+            os.environ["DATABRICKS_HOST"] = w.config.host
+            os.environ["DATABRICKS_TOKEN"] = token
+            os.environ.pop("DATABRICKS_CONFIG_PROFILE", None)  # force static-bearer (pat) auth
+            print(f"  (pinned OAuth token from profile '{profile}' → static bearer for the run)")
+    except Exception as exc:
+        print(f"  (oauth-pin note: {str(exc)[:100]})")
+
+
 def _setup_experiment() -> None:
     try:
         if settings.mlflow_experiment_id:
@@ -224,6 +254,7 @@ def evaluate(limit: int | None = None):
     to the experiment — works when auth permits trace/assessment writes (ambient SP on Databricks,
     or a PAT locally). On a local U2M-OAuth profile the workspace rejects these APIs; use
     evaluate_direct() instead for in-process scores."""
+    _pin_oauth_token()  # concurrency-safe OAuth (avoids CLI token-cache race → judge 401s)
     scorers = _scorers() + _deterministic_scorers()
     for s in scorers:
         try:
@@ -247,6 +278,7 @@ def evaluate_direct(limit: int | None = None):
     """Trace-free eval: run the agent, then call each make_judge scorer directly on the
     inputs/outputs (no trace round-trip, so no artifact-credential dependency). Prints per-question
     verdicts + per-scorer pass rates. Uses the same MLflow scorers as evaluate()."""
+    _pin_oauth_token()  # concurrency-safe OAuth (avoids CLI token-cache race → judge 401s)
     scorers = _scorers()
     records = EVAL_RECORDS[:limit] if limit else EVAL_RECORDS
     # gate_correctness is deterministic (no LLM); tallied separately since it needs `expectations`.
