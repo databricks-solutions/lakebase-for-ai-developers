@@ -1,0 +1,332 @@
+"""Custom web UI mounted onto the agent server's FastAPI app.
+
+The agent already exposes the MLflow Responses API (`/invocations` + run/poll/resume) via
+`LongRunningAgentServer`. This module adds the *human* surface on the SAME app (one Databricks
+App, the graph in-process per CLAUDE.md):
+
+  • a one-page React SPA (Claude-style chat) served from `frontend/dist`,
+  • `/api/me`          — the OBO caller identity (who the user is),
+  • `/api/sessions`    — that user's conversation history (kept in the LangGraph store),
+  • `/api/explorer`    — deep links + live peeks into every backend piece the demo uses
+                          (Lakebase project, pgvector table, MLflow experiment, Vector Search
+                          index, Genie space, Unity Catalog tables).
+
+Auth model: Databricks Apps forward the caller's identity + OAuth token as `X-Forwarded-*`
+headers. UC reads in the explorer run **on-behalf-of the user** (their token), so row/column
+governance is the user's. The agent itself + Lakebase use the app service principal.
+
+`start_server.py` imports this module so the routes register on `app`. Build the SPA with
+`npm --prefix frontend ci && npm --prefix frontend run build` (or use the `start-app` launcher).
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, asdict
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from agent_server.config import settings
+from agent_server.start_server import app  # the LongRunningAgentServer FastAPI app
+
+logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SPA_DIR = _REPO_ROOT / "frontend" / "dist"
+
+router = APIRouter(prefix="/api", tags=["webapp"])
+
+
+# ── Identity (OBO) ────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class Caller:
+    email: str
+    user_id: Optional[str]
+    access_token: Optional[str]  # None only in local-dev
+    is_local: bool
+
+
+def caller_identity(request: Request) -> Caller:
+    """Resolve the forwarded Databricks Apps user identity, with a local-dev fallback.
+
+    On the deployed App the proxy injects `X-Forwarded-Access-Token` + `X-Forwarded-Email`;
+    locally we fall back to DEMO_PLANNER_USER (or the profile user) so the UI boots under uvicorn.
+    """
+    h = request.headers
+    token = h.get("x-forwarded-access-token")
+    email = h.get("x-forwarded-email") or h.get("x-forwarded-preferred-username")
+    user_id = h.get("x-forwarded-user")
+    if token and email:
+        return Caller(email=email, user_id=user_id, access_token=token, is_local=False)
+
+    # Local dev: no Apps proxy in front. Use the configured demo planner, else the profile user.
+    email = settings.demo_planner_user or _local_user() or "local-dev@example.com"
+    return Caller(email=email, user_id=None, access_token=None, is_local=True)
+
+
+@lru_cache(maxsize=1)
+def _local_user() -> Optional[str]:
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        return WorkspaceClient().current_user.me().user_name
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@lru_cache(maxsize=1)
+def _workspace_host() -> str:
+    """Workspace base URL for building deep links (no trailing slash)."""
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        return WorkspaceClient().config.host.rstrip("/")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _obo_client(caller: Caller):
+    """A WorkspaceClient acting as the caller (OBO) on the App; the app principal locally."""
+    from databricks.sdk import WorkspaceClient
+
+    if caller.access_token and not caller.is_local:
+        return WorkspaceClient(host=_workspace_host(), token=caller.access_token)
+    return WorkspaceClient()
+
+
+@router.get("/me")
+def me(request: Request) -> dict[str, Any]:
+    c = caller_identity(request)
+    return {
+        "email": c.email,
+        "user_id": c.user_id,
+        "is_local": c.is_local,
+        "workspace_host": _workspace_host(),
+        "demo_planner_user": settings.demo_planner_user,
+        # The agent scopes operational access to this identity (user_access ACL). Surfaced so
+        # the UI can warn when the signed-in user differs from the seeded in-scope planner.
+        "in_scope": (not settings.demo_planner_user) or (c.email == settings.demo_planner_user),
+    }
+
+
+# ── Backend explorer — "peer into every component" ──────────────────────────────────────────
+
+def _resource_cards() -> list[dict[str, Any]]:
+    """Static-ish metadata + deep links for each backend piece. Live peeks are separate routes."""
+    host = _workspace_host()
+    cat, sch = settings.uc_catalog, settings.uc_schema
+    proj = settings.lakebase_autoscaling_project
+    branch = settings.lakebase_autoscaling_branch
+    cards: list[dict[str, Any]] = []
+
+    # 1 — Lakebase (autoscaling Postgres: agent memory + operational pgvector live here)
+    cards.append({
+        "key": "lakebase",
+        "title": "Lakebase",
+        "subtitle": "Autoscaling Postgres — agent memory + operational rows",
+        "accent": "navy",
+        "facts": {
+            "project": proj or settings.lakebase_instance_name or "—",
+            "branch": branch or "—",
+            "database": settings.lakebase_database,
+            "memory schema": settings.lakebase_memory_schema,
+            "operational schema": settings.lakebase_operational_schema,
+        },
+        "link": f"{host}/compute/database-instances" if host else None,
+        "link_label": "Open Lakebase",
+    })
+    # 2 — pgvector operational table (the hybrid-query differentiator)
+    cards.append({
+        "key": "pgvector",
+        "title": "pgvector",
+        "subtitle": "quality_incidents — vector(1024) + HNSW, joined in-query to live rows",
+        "accent": "lava",
+        "facts": {
+            "table": f"{settings.lakebase_operational_schema}.quality_incidents",
+            "index": "HNSW (cosine)",
+            "embedding": settings.embedding_endpoint,
+        },
+        "peek": "/api/explorer/pgvector",
+        "link": f"{host}/compute/database-instances" if host else None,
+        "link_label": "Open in Lakebase",
+    })
+    # 3 — MLflow experiment (the trace of every run)
+    exp = settings.mlflow_experiment_id
+    cards.append({
+        "key": "experiment",
+        "title": "MLflow Experiment",
+        "subtitle": "Every run is one trace — routing, retrieval, planner, gate, HITL",
+        "accent": "blue",
+        "facts": {"experiment_id": exp or "(auto per-user)"},
+        "link": (f"{host}/ml/experiments/{exp}" if (host and exp) else (f"{host}/ml/experiments" if host else None)),
+        "link_label": "Open experiment",
+    })
+    # 4 — Vector Search (Knowledge agent / RAG corpus)
+    vs_idx = settings.vector_search_index
+    vs_link = None
+    if host and vs_idx and vs_idx.count(".") == 2:
+        c2, s2, i2 = vs_idx.split(".")
+        vs_link = f"{host}/explore/data/{c2}/{s2}/{i2}"
+    cards.append({
+        "key": "vector_search",
+        "title": "Vector Search",
+        "subtitle": "Mosaic AI VS index — the large unstructured knowledge corpus",
+        "accent": "green",
+        "facts": {
+            "endpoint": settings.vector_search_endpoint or "—",
+            "index": vs_idx or "(not configured)",
+        },
+        "link": vs_link or (f"{host}/ml/vector-search" if host else None),
+        "link_label": "Open Vector Search",
+    })
+    # 5 — Genie (Analytics agent)
+    gid = settings.genie_space_id
+    cards.append({
+        "key": "genie",
+        "title": "Genie Space",
+        "subtitle": "NL→SQL analytics over the governed operational tables",
+        "accent": "yellow",
+        "facts": {"space_id": gid or "(not configured)"},
+        "link": (f"{host}/genie/rooms/{gid}" if (host and gid) else None),
+        "link_label": "Open Genie",
+    })
+    # 6 — Unity Catalog tables (the governed source data)
+    cards.append({
+        "key": "uc_tables",
+        "title": "Unity Catalog",
+        "subtitle": f"Governed source tables in {cat}.{sch}",
+        "accent": "maroon",
+        "facts": {"catalog": cat, "schema": sch},
+        "peek": "/api/explorer/uc-tables",
+        "link": f"{host}/explore/data/{cat}/{sch}" if host else None,
+        "link_label": "Open Catalog Explorer",
+    })
+    return cards
+
+
+@router.get("/explorer")
+def explorer() -> dict[str, Any]:
+    return {"workspace_host": _workspace_host(), "cards": _resource_cards()}
+
+
+@router.get("/explorer/uc-tables")
+def uc_tables(request: Request) -> dict[str, Any]:
+    """List tables in the operational UC schema, on-behalf-of the caller (governance applies)."""
+    caller = caller_identity(request)
+    try:
+        w = _obo_client(caller)
+        tables = list(w.tables.list(catalog_name=settings.uc_catalog, schema_name=settings.uc_schema))
+        rows = [{
+            "name": t.name,
+            "full_name": t.full_name,
+            "type": getattr(t.table_type, "value", str(t.table_type)) if t.table_type else None,
+            "columns": len(t.columns or []),
+            "comment": t.comment,
+        } for t in tables]
+        return {"catalog": settings.uc_catalog, "schema": settings.uc_schema, "tables": rows, "obo": not caller.is_local}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("uc-tables peek failed: %s", exc)
+        return {"catalog": settings.uc_catalog, "schema": settings.uc_schema, "tables": [], "error": str(exc)}
+
+
+@router.get("/explorer/pgvector")
+def pgvector_peek() -> dict[str, Any]:
+    """Live peek at the operational pgvector table (count + a few rows). Uses app creds."""
+    schema = settings.lakebase_operational_schema
+    try:
+        import psycopg
+        from databricks.sdk import WorkspaceClient
+
+        w = WorkspaceClient()
+        # Resolve the autoscaling endpoint host + a short-lived OAuth DB credential.
+        ep = settings.lakebase_autoscaling_endpoint or "primary"
+        full_ep = ep if ep.startswith("projects/") else (
+            f"projects/{settings.lakebase_autoscaling_project}/branches/"
+            f"{settings.lakebase_autoscaling_branch}/endpoints/{ep}"
+        )
+        endpoint = w.postgres.get_endpoint(name=full_ep)
+        host = endpoint.status.hosts.host
+        cred = w.postgres.generate_database_credential(endpoint=full_ep)
+        conn_str = (
+            f"host={host} dbname={settings.lakebase_database} "
+            f"user={w.current_user.me().user_name} password={cred.token} sslmode=require"
+        )
+        with psycopg.connect(conn_str, connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT count(*) FROM {schema}.quality_incidents")
+            total = cur.fetchone()[0]
+            cur.execute(
+                f"SELECT incident_id, supplier_id, sku, category, severity, summary "
+                f"FROM {schema}.quality_incidents WHERE expired_at IS NULL "
+                f"ORDER BY incident_date DESC LIMIT 8"
+            )
+            cols = [d.name for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        return {"table": f"{schema}.quality_incidents", "active_rows": total, "sample": rows}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pgvector peek failed: %s", exc)
+        return {"table": f"{schema}.quality_incidents", "sample": [], "error": str(exc)}
+
+
+# ── Session history (per user) — kept in the LangGraph store ────────────────────────────────
+# The store (AsyncDatabricksStore) is already open on the app; we use it as a small KV index of
+# the user's conversations under namespace ("ui_sessions", <email>). Each item is one thread.
+
+def _store():
+    store = getattr(app.state, "store", None)
+    if store is None:
+        raise HTTPException(503, "Lakebase store not ready")
+    return store
+
+
+@router.get("/sessions")
+async def list_sessions(request: Request) -> dict[str, Any]:
+    caller = caller_identity(request)
+    try:
+        items = await _store().asearch(("ui_sessions", caller.email), limit=100)
+        sessions = sorted(
+            ({"thread_id": it.key, **(it.value or {})} for it in items),
+            key=lambda s: s.get("updated_at", ""), reverse=True,
+        )
+        return {"sessions": sessions}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("list_sessions failed: %s", exc)
+        return {"sessions": [], "error": str(exc)}
+
+
+@router.put("/sessions/{thread_id}")
+async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    caller = caller_identity(request)
+    value = {
+        "title": (body.get("title") or "New conversation")[:120],
+        "updated_at": body.get("updated_at") or "",
+        "preview": (body.get("preview") or "")[:200],
+    }
+    try:
+        await _store().aput(("ui_sessions", caller.email), thread_id, value)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("upsert_session failed: %s", exc)
+    return {"thread_id": thread_id, **value}
+
+
+app.include_router(router)
+
+
+# ── Serve the SPA (built React app). Mounted last so /api/* + /invocations win. ─────────────
+if _SPA_DIR.exists():
+    # Served at /ui to avoid clobbering the agent server's own chat proxy at "/". To make this
+    # the App root, set enable_chat_proxy=False in start_server.py and mount at "/".
+    app.mount("/ui", StaticFiles(directory=str(_SPA_DIR), html=True), name="spa")
+    logger.info("Mounted SPA at /ui from %s", _SPA_DIR)
+else:
+    @app.get("/ui")
+    def _spa_missing() -> JSONResponse:  # pragma: no cover
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "SPA not built. Run: npm --prefix frontend ci && npm --prefix frontend run build"},
+        )

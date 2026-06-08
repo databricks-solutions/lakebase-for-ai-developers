@@ -82,6 +82,10 @@ async def _lifespan(app):
 
 app.router.lifespan_context = _lifespan
 
+# Register the custom web UI (chat SPA + /api/me + /api/sessions + /api/explorer) onto `app`.
+# Imported last so `app` is fully defined first (webapp.py does `from ...start_server import app`).
+import agent_server.webapp  # noqa: E402,F401
+
 
 def main():
     agent_server.run(app_import_string="agent_server.start_server:app")
