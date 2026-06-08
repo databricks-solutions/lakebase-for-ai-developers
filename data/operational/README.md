@@ -27,7 +27,7 @@ the one same-source replacement PO (Henkel, 500) is risky, and there's an altern
 
 | Path | Tables | Why |
 |---|---|---|
-| **Synced Tables** (managed Delta→Postgres mirror, read-only) | `inventory_current`, `open_pos` (Continuous, CDF on); `suppliers`, `product_dim`, `supplier_status`, `user_access` (Snapshot) | Relational data, no vectors — let the managed sync keep it fresh |
+| **Synced Tables** (managed Delta→Postgres mirror, read-only) | `inventory_current`, `open_pos` (`LAKEBASE_SYNC_MODE`, default Snapshot; CDF on so it can flip to Continuous); `suppliers`, `product_dim`, `supplier_status`, `user_access` (Snapshot) | Relational data, no vectors — let the managed sync keep it fresh |
 | **Native pre-seeded pgvector table** (written directly via psycopg) | `quality_incidents` (`embedding vector(1024)`) | A Delta `array<float>` syncs to Postgres `jsonb` (not a real `vector`), and synced tables are read-only — so the vector table can't ride a sync. We `CREATE TABLE` + compute embeddings via the endpoint + `INSERT ::vector` + `CREATE INDEX hnsw` ourselves |
 
 Lakebase pgvector has **no managed-embeddings option** (unlike Vector Search) — you always compute
@@ -110,6 +110,13 @@ uv run python data/operational/04_verify_hybrid_query.py     # assert the hero s
 plus `LAKEBASE_UC_CATALOG` for `03` and the Databricks CLI. (`02`/`04` also accept a full
 `projects/<p>/branches/<b>/endpoints/<id>` path, or `LAKEBASE_INSTANCE_NAME` for a provisioned
 instance.) `02`/`04` additionally reach the embedding endpoint.
+
+**Sync mode / cost.** The two live tables (`inventory_current`, `open_pos`) default to **Snapshot**
+(`LAKEBASE_SYNC_MODE=SNAPSHOT`) — a one-time copy that goes idle, so no always-on DLT pipeline cost;
+fine for the static seeded data. For a demo that shows live updates, set `LAKEBASE_SYNC_MODE=CONTINUOUS`
+and re-run `03` — it detects the mode change and delete+recreates those two synced tables (there's no
+in-place policy update). Flip back to Snapshot the same way after the demo. CDF stays enabled on the
+source either way, so the flip is always available.
 
 ## Genie evaluation
 
