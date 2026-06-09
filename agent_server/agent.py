@@ -97,12 +97,15 @@ def _setup_mlflow_experiment() -> None:
             from databricks.sdk import WorkspaceClient
 
             me = WorkspaceClient().current_user.me().user_name
-            name = f"/Users/{me}/supply-chain-planner"
             if trace_location is not None:
+                # A UC trace destination only binds to an experiment with NO existing traces, so
+                # use a dedicated experiment for UC-backed tracing (separate from any prior one).
+                name = f"/Users/{me}/supply-chain-planner-uc"
                 mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
-                logger.info("MLflow UC tracing → %s.%s (prefix=%s)", cat, sch, settings.mlflow_trace_table_prefix)
+                logger.info("MLflow UC tracing → %s.%s (prefix=%s) on %s",
+                            cat, sch, settings.mlflow_trace_table_prefix, name)
             else:
-                mlflow.set_experiment(name)
+                mlflow.set_experiment(f"/Users/{me}/supply-chain-planner")
     except Exception as exc:  # never let trace config crash the server
         logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
 
