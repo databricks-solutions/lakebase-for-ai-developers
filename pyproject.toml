@@ -36,7 +36,10 @@ dependencies = [
     "pypdf>=5.0.0",
     "langchain-community>=0.3.0",
     "langchain-text-splitters>=0.3.0",
-    "databricks-vectorsearch>=0.50",
+    # Cap <0.74: 0.74 moved VectorSearchIndex out of databricks.vector_search.client, which
+    # databricks-openai (pulled by databricks-langchain[memory]) still imports from there →
+    # ImportError at `import databricks_langchain`. See databricks/databricks-ai-bridge#433.
+    "databricks-vectorsearch>=0.50,<0.74",
 ]
 
 [build-system]
