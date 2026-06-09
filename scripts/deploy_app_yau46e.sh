@@ -5,7 +5,7 @@
 #   ./scripts/deploy_app_yau46e.sh
 #
 # Prereqs:
-#   • frontend/dist is BUILT:  npm --prefix frontend ci && npm --prefix frontend run build
+#   • frontend/dist is BUILT:  npm --prefix frontend install && npm --prefix frontend run build
 #   • profile `mfg-sc-agent` authed to https://fevm-serverless-stable-yau46e.cloud.databricks.com
 #   • app.yaml present at repo root (runtime manifest with the yau46e env)
 set -euo pipefail
@@ -17,7 +17,7 @@ SRC="/Workspace/Users/${USER_EMAIL}/apps/${APP_NAME}"
 
 if [ ! -d frontend/dist ]; then
   echo "ERROR: frontend/dist not found. Build it first:"
-  echo "  npm --prefix frontend ci && npm --prefix frontend run build"
+  echo "  npm --prefix frontend install && npm --prefix frontend run build"
   exit 1
 fi
 

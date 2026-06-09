@@ -51,7 +51,7 @@ is also the in-scope operational identity, so the hero scenario works.
 ## Build for deploy
 
 ```bash
-npm --prefix frontend ci && npm --prefix frontend run build   # → frontend/dist
+npm --prefix frontend install && npm --prefix frontend run build   # → frontend/dist
 uv run start-server                                           # serves the SPA at /ui
 ```
 
