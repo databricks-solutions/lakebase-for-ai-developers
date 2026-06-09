@@ -84,7 +84,10 @@ app.router.lifespan_context = _lifespan
 
 # Register the custom web UI (chat SPA + /api/me + /api/sessions + /api/explorer) onto `app`.
 # Imported last so `app` is fully defined first (webapp.py does `from ...start_server import app`).
-import agent_server.webapp  # noqa: E402,F401
+# NOTE: `from agent_server import webapp`, NOT `import agent_server.webapp` — the latter rebinds
+# the name `agent_server` to the package, shadowing the LongRunningAgentServer instance below and
+# breaking `agent_server.run(...)` in main().
+from agent_server import webapp  # noqa: E402,F401
 
 
 def main():
