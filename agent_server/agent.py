@@ -154,10 +154,9 @@ def _render_recommendation(rec) -> str:
     if rec.actions:
         lines.append("Proposed actions:")
         lines += [f"  {i}. {a}" for i, a in enumerate(rec.actions, 1)]
-    if rec.est_cost_usd is not None:
-        lines.append(f"\nEstimated cost: ${rec.est_cost_usd:,.0f}")
-    lines.append(f"Needs approval: {rec.needs_approval}")
-    return "\n".join(lines)
+    # est_cost / needs_approval are surfaced by the UI as a grey footnote (from custom_outputs),
+    # not inline in the assistant text.
+    return "\n".join(lines).rstrip()
 
 
 def _custom_outputs(state: dict, interrupt_payload: Any | None) -> dict[str, Any]:

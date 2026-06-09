@@ -134,6 +134,11 @@ function Extras({ extras }: { extras: NonNullable<ChatMessage["extras"]> }) {
   if (extras.route) chips.push(`route: ${extras.route}`);
   if (extras.status) chips.push(extras.status);
   const appr = extras.approval_request;
+  const rec = extras.recommendation as { est_cost_usd?: number | null; needs_approval?: boolean } | undefined;
+  const cost =
+    rec?.est_cost_usd != null
+      ? `$${Number(rec.est_cost_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : "—";
   return (
     <div style={{ marginTop: 8, maxWidth: "100%", display: "grid", gap: 8 }}>
       {chips.length > 0 && (
@@ -168,6 +173,11 @@ function Extras({ extras }: { extras: NonNullable<ChatMessage["extras"]> }) {
             {extras.trace_notes.map((t, i) => <li key={i}>{t}</li>)}
           </ol>
         </details>
+      )}
+      {rec && (
+        <div style={{ color: "var(--fg-3)", fontSize: 11 }}>
+          Estimated cost: {cost} · {rec.needs_approval ? "Approval required" : "No approval needed"}
+        </div>
       )}
     </div>
   );
