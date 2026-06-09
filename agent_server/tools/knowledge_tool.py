@@ -64,8 +64,26 @@ def _vector_store():
     # On Databricks both env vars are absent and we let the workspace's ambient auth do its job.
     client_args: dict = {"disable_notice": True}  # suppress the PAT-recommendation banner
     if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
+        # Local U2M: token exported above.
         client_args["workspace_url"] = os.environ["DATABRICKS_HOST"]
         client_args["personal_access_token"] = os.environ["DATABRICKS_TOKEN"]
+    elif os.environ.get("DATABRICKS_CLIENT_ID") and os.environ.get("DATABRICKS_CLIENT_SECRET"):
+        # Databricks Apps: the app service principal's OAuth creds are injected as
+        # DATABRICKS_CLIENT_ID/SECRET. VectorSearchClient does NOT use the ambient OAuth chain
+        # (unlike WorkspaceClient), so pass the SP creds explicitly or it raises
+        # "specify either personal access token or service principal client ID and secret."
+        host = os.environ.get("DATABRICKS_HOST")
+        if not host:
+            try:
+                from databricks.sdk import WorkspaceClient
+
+                host = WorkspaceClient().config.host
+            except Exception:  # noqa: BLE001
+                host = None
+        if host:
+            client_args["workspace_url"] = host
+        client_args["service_principal_client_id"] = os.environ["DATABRICKS_CLIENT_ID"]
+        client_args["service_principal_client_secret"] = os.environ["DATABRICKS_CLIENT_SECRET"]
 
     return DatabricksVectorSearch(
         index_name=settings.vector_search_index,
