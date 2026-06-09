@@ -42,6 +42,31 @@ _SPA_DIR = _REPO_ROOT / "frontend" / "dist"
 router = APIRouter(prefix="/api", tags=["webapp"])
 
 
+# ── OBO capture ─────────────────────────────────────────────────────────────────────────────
+# Pure ASGI middleware (not BaseHTTPMiddleware — that runs the endpoint in a separate task and
+# loses contextvars). Captures the Databricks Apps forwarded user token into the OBO contextvar
+# for EVERY request (incl. /invocations), so the Knowledge/Genie tools call as the user.
+
+class _OBOTokenMiddleware:
+    def __init__(self, asgi_app):
+        self.asgi_app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            from agent_server.obo import set_obo_token
+
+            token = None
+            for k, v in scope.get("headers", []):
+                if k == b"x-forwarded-access-token":
+                    token = v.decode("latin-1")
+                    break
+            set_obo_token(token)
+        await self.asgi_app(scope, receive, send)
+
+
+app.add_middleware(_OBOTokenMiddleware)
+
+
 # ── Identity (OBO) ────────────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

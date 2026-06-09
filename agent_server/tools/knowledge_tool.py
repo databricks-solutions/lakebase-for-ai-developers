@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-from functools import lru_cache
 
 from langchain_core.tools import tool
 
@@ -46,46 +45,43 @@ def _export_local_vs_credentials() -> None:
         logger.warning("Could not export local VS credentials: %s", exc)
 
 
-@lru_cache(maxsize=1)
 def _vector_store():
-    """Lazy + cached. Builds the DatabricksVectorSearch client on first use so importing
-    this module doesn't require workspace creds."""
+    """Build the DatabricksVectorSearch client for THIS request.
+
+    OBO-first (minimal-permission): when the caller's forwarded token is present we query the
+    index AS THE USER, so Unity Catalog governs per user and the app SP needs no grant on the
+    index. NOT cached — caching would reuse one user's token for everyone. Falls back to a local
+    U2M token, then the app SP's OAuth creds (eval / background tasks)."""
     if not settings.vector_search_index:
         raise RuntimeError(
             "VECTOR_SEARCH_INDEX is not set in env. Run data/knowledge/03_build_vs_index.py "
             "then paste the index name into .env."
         )
-    _export_local_vs_credentials()
     from databricks_langchain import DatabricksVectorSearch
 
-    # VectorSearchClient (under DatabricksVectorSearch) requires PAT or SP creds passed as
-    # kwargs — it doesn't read DATABRICKS_HOST/TOKEN env vars. When running locally with a
-    # U2M profile we set those env vars above, then pass them through `client_args` here.
-    # On Databricks both env vars are absent and we let the workspace's ambient auth do its job.
-    client_args: dict = {"disable_notice": True}  # suppress the PAT-recommendation banner
-    if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
-        # Local U2M: token exported above.
-        client_args["workspace_url"] = os.environ["DATABRICKS_HOST"]
-        client_args["personal_access_token"] = os.environ["DATABRICKS_TOKEN"]
-    elif os.environ.get("DATABRICKS_CLIENT_ID") and os.environ.get("DATABRICKS_CLIENT_SECRET"):
-        # Databricks Apps: the app service principal's OAuth creds are injected as
-        # DATABRICKS_CLIENT_ID/SECRET. VectorSearchClient does NOT use the ambient OAuth chain
-        # (unlike WorkspaceClient), so pass the SP creds explicitly or it raises
-        # "specify either personal access token or service principal client ID and secret."
-        host = os.environ.get("DATABRICKS_HOST")
-        if not host:
-            try:
-                from databricks.sdk import WorkspaceClient
+    from agent_server.obo import get_obo_token, workspace_host
 
-                host = WorkspaceClient().config.host
-            except Exception:  # noqa: BLE001
-                host = None
-        if host:
-            if not host.startswith(("http://", "https://")):
-                host = "https://" + host  # Apps' DATABRICKS_HOST is a bare hostname; VS needs a scheme
+    # VectorSearchClient (under DatabricksVectorSearch) requires an explicit token / SP creds —
+    # it does NOT use the ambient OAuth chain. Prefer the caller's OBO token.
+    client_args: dict = {"disable_notice": True}  # suppress the PAT-recommendation banner
+    obo = get_obo_token()
+    if obo:
+        # On-behalf-of-user: UC enforces the caller's own access to the corpus.
+        if (host := workspace_host()):
             client_args["workspace_url"] = host
-        client_args["service_principal_client_id"] = os.environ["DATABRICKS_CLIENT_ID"]
-        client_args["service_principal_client_secret"] = os.environ["DATABRICKS_CLIENT_SECRET"]
+        client_args["personal_access_token"] = obo
+    else:
+        _export_local_vs_credentials()
+        if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
+            # Local U2M: token exported above.
+            client_args["workspace_url"] = os.environ["DATABRICKS_HOST"]
+            client_args["personal_access_token"] = os.environ["DATABRICKS_TOKEN"]
+        elif os.environ.get("DATABRICKS_CLIENT_ID") and os.environ.get("DATABRICKS_CLIENT_SECRET"):
+            # App SP fallback (no forwarded user token — e.g. a background/eval run).
+            if (host := workspace_host()):
+                client_args["workspace_url"] = host
+            client_args["service_principal_client_id"] = os.environ["DATABRICKS_CLIENT_ID"]
+            client_args["service_principal_client_secret"] = os.environ["DATABRICKS_CLIENT_SECRET"]
 
     return DatabricksVectorSearch(
         index_name=settings.vector_search_index,
