@@ -44,6 +44,13 @@ env:
   - name: DATABRICKS_EMBEDDING_ENDPOINT
     value: "databricks-gte-large-en"
 
+  # Knowledge agent (Vector Search) — Ram's PR #6 index on yau46e. Without these the Knowledge
+  # tool raises "VECTOR_SEARCH_INDEX is not set" and any Knowledge-routed question 500s.
+  - name: VECTOR_SEARCH_ENDPOINT
+    value: "supply-chain-planner-vs"
+  - name: VECTOR_SEARCH_INDEX
+    value: "serverless_stable_yau46e_catalog.planner.knowledge_chunks_index"
+
   # Single inference model for v1.
   - name: LLM_ROUTER_ENDPOINT
     value: "databricks-claude-opus-4-8"
