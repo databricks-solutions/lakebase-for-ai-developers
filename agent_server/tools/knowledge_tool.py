@@ -81,6 +81,8 @@ def _vector_store():
             except Exception:  # noqa: BLE001
                 host = None
         if host:
+            if not host.startswith(("http://", "https://")):
+                host = "https://" + host  # Apps' DATABRICKS_HOST is a bare hostname; VS needs a scheme
             client_args["workspace_url"] = host
         client_args["service_principal_client_id"] = os.environ["DATABRICKS_CLIENT_ID"]
         client_args["service_principal_client_secret"] = os.environ["DATABRICKS_CLIENT_SECRET"]

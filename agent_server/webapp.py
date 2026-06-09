@@ -284,11 +284,19 @@ def _store():
     return store
 
 
+def _ns_label(email: str) -> str:
+    """LangGraph store namespace labels can't contain '.' (or other punctuation) — emails do.
+    Sanitize to a deterministic alnum/underscore label so upsert + list use the same namespace."""
+    import re
+
+    return re.sub(r"[^A-Za-z0-9_-]", "_", email or "anon")
+
+
 @router.get("/sessions")
 async def list_sessions(request: Request) -> dict[str, Any]:
     caller = caller_identity(request)
     try:
-        items = await _store().asearch(("ui_sessions", caller.email), limit=100)
+        items = await _store().asearch(("ui_sessions", _ns_label(caller.email)), limit=100)
         sessions = sorted(
             ({"thread_id": it.key, **(it.value or {})} for it in items),
             key=lambda s: s.get("updated_at", ""), reverse=True,
@@ -308,7 +316,7 @@ async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] 
         "preview": (body.get("preview") or "")[:200],
     }
     try:
-        await _store().aput(("ui_sessions", caller.email), thread_id, value)
+        await _store().aput(("ui_sessions", _ns_label(caller.email)), thread_id, value)
     except Exception as exc:  # noqa: BLE001
         logger.warning("upsert_session failed: %s", exc)
     return {"thread_id": thread_id, **value}

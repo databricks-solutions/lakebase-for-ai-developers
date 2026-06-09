@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ChatMessage } from "../types";
 
+// One per capability: Analytics (Genie), Knowledge (VS), Operational (pgvector hybrid),
+// and two cross-conversation long-term-memory recalls.
 const SUGGESTIONS = [
-  "Show me similar quality issues for Henkel, joined to on-hand inventory and open POs",
-  "Which suppliers are at risk right now?",
-  "Total open PO quantity by supplier for Q4",
+  "Total unfulfilled demand by product code for Q4/Q1?",
+  "Have we seen a disruption like the PrecisionBond recall before?",
+  "Similar quality issues for Henkel, scoped to the product codes I can access, joined to on-hand inventory and open POs",
+  "What did we decide about the Acme delay yesterday?",
+  "Continue this morning's escalation",
 ];
 
 export function ChatPanel({
