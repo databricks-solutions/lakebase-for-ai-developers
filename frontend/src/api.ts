@@ -82,7 +82,7 @@ async function consumeSSE(payload: Record<string, unknown>, handlers: StreamHand
       let obj: any;
       try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
       if (obj.type === "step" && obj.label) handlers.onStep?.(obj.label);
-      else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", (obj.extras ?? {}) as AgentExtras);
+      else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", { ...(obj.extras ?? {}), trace_id: obj.trace_id } as AgentExtras);
       else if (obj.type === "error") handlers.onError(obj.error || "stream error");
     }
   }
@@ -98,6 +98,16 @@ export const resumeMessage = (
   verdict: "approved" | "rejected",
   handlers: StreamHandlers
 ): Promise<void> => consumeSSE({ thread_id: threadId, verdict }, handlers);
+
+/** Log 👍/👎 feedback on a run's MLflow trace. */
+export const sendFeedback = (traceId: string, value: boolean, comment?: string): Promise<{ ok: boolean }> =>
+  fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trace_id: traceId, value, comment }),
+  })
+    .then((r) => r.json())
+    .catch(() => ({ ok: false }));
 
 /**
  * Send one turn to the agent. Context is server-side: we pass thread_id (Lakebase checkpoint)

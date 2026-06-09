@@ -453,9 +453,17 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
                             yield _sse({"type": "step", "node": node, "label": _STEP_LABELS[node]})
                 snapshot = await graph.aget_state(config)
                 state = dict(snapshot.values) if snapshot else {}
+                trace_id = None
+                try:
+                    import mlflow
+
+                    trace_id = mlflow.get_last_active_trace_id()
+                except Exception:  # noqa: BLE001
+                    pass
                 yield _sse({
                     "type": "done",
                     "thread_id": thread_id,
+                    "trace_id": trace_id,  # client attaches 👍/👎 feedback to this trace
                     "text": _final_text(state, interrupt_payload),
                     "extras": _custom_outputs(state, interrupt_payload),
                 })
@@ -469,6 +477,29 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
         # X-Accel-Buffering: no is load-bearing — keeps the Apps proxy from buffering the stream.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+@router.post("/feedback")
+def feedback(request: Request, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Log 👍/👎 (and an optional comment) as an MLflow assessment on the run's trace, so feedback
+    is queryable alongside traces for eval. The human is recorded as the source; the write is the
+    app SP (which has Can Edit on the trace experiment)."""
+    caller = caller_identity(request)
+    trace_id = body.get("trace_id")
+    if not trace_id:
+        raise HTTPException(400, "trace_id is required")
+    try:
+        import mlflow
+        from mlflow.entities.feedback import FeedbackSource
+
+        source = FeedbackSource(source_type="HUMAN", source_id=caller.email)
+        mlflow.log_feedback(trace_id=trace_id, name="thumbs_up", value=bool(body.get("value")), source=source)
+        if body.get("comment"):
+            mlflow.log_feedback(trace_id=trace_id, name="comment", value=str(body["comment"]), source=source)
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("feedback failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
 
 
 app.include_router(router)

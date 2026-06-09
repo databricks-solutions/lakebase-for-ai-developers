@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { sendFeedback } from "../api";
 import type { ChatMessage } from "../types";
 
 // One per capability: Analytics (Genie), Knowledge (VS), Operational (pgvector hybrid),
@@ -189,8 +190,33 @@ function Extras({ extras, onResume, busy }: { extras: NonNullable<ChatMessage["e
           Estimated cost: {cost} · {rec.needs_approval ? "Approval required" : "No approval needed"}
         </div>
       )}
+      {extras.trace_id && <FeedbackButtons traceId={extras.trace_id} />}
     </div>
   );
+}
+
+function FeedbackButtons({ traceId }: { traceId: string }) {
+  const [picked, setPicked] = useState<null | "up" | "down">(null);
+  const choose = (v: "up" | "down") => {
+    if (picked) return;
+    setPicked(v);
+    void sendFeedback(traceId, v === "up");
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--fg-3)", fontSize: 12 }}>
+      <button type="button" title="Helpful" disabled={!!picked} onClick={() => choose("up")} style={fbBtn(picked === "up")}>👍</button>
+      <button type="button" title="Not helpful" disabled={!!picked} onClick={() => choose("down")} style={fbBtn(picked === "down")}>👎</button>
+      {picked && <span>Thanks — logged to the trace.</span>}
+    </div>
+  );
+}
+
+function fbBtn(active: boolean): CSSProperties {
+  return {
+    border: "1px solid var(--border)", background: active ? "var(--bg-subtle)" : "transparent",
+    borderRadius: "var(--radius-pill)", padding: "2px 8px", cursor: active ? "default" : "pointer",
+    fontSize: 13, lineHeight: 1.4,
+  };
 }
 
 const chip: CSSProperties = {

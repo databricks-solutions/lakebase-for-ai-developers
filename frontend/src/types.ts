@@ -22,6 +22,7 @@ export interface AgentExtras {
   status?: string;
   trace_notes?: string[];
   operational_sql?: string;
+  trace_id?: string | null; // MLflow trace id — 👍/👎 feedback attaches to this
   [k: string]: unknown;
 }
 
