@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
-import { getMe, listSessions, sendMessage, upsertSession } from "./api";
+import { getMe, listSessions, streamMessage, upsertSession } from "./api";
 import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
@@ -30,32 +30,30 @@ export default function App() {
   const onSend = useCallback(
     async (text: string) => {
       const userMsg: ChatMessage = { id: newThreadId(), role: "user", text };
-      const pending: ChatMessage = { id: newThreadId(), role: "assistant", text: "", pending: true };
+      const pendingId = newThreadId();
+      const pending: ChatMessage = { id: pendingId, role: "assistant", text: "", pending: true, steps: [] };
       const isFirst = (byThread[thread] ?? []).length === 0;
+      const patch = (fn: (x: ChatMessage) => ChatMessage) =>
+        setByThread((m) => ({ ...m, [thread]: (m[thread] ?? []).map((x) => (x.id === pendingId ? fn(x) : x)) }));
+
       setByThread((m) => ({ ...m, [thread]: [...(m[thread] ?? []), userMsg, pending] }));
       setBusy(true);
-      try {
-        const { text: reply, extras } = await sendMessage(text, thread, me?.email ?? null);
-        setByThread((m) => ({
-          ...m,
-          [thread]: (m[thread] ?? []).map((x) => (x.id === pending.id ? { ...x, text: reply, extras, pending: false } : x)),
-        }));
-        await upsertSession(thread, {
-          title: isFirst ? text.slice(0, 80) : undefined,
-          preview: reply.slice(0, 160),
-          updated_at: new Date().toISOString(),
-        }).catch(() => {});
-        refreshSessions();
-      } catch (e) {
-        setByThread((m) => ({
-          ...m,
-          [thread]: (m[thread] ?? []).map((x) => (x.id === pending.id ? { ...x, text: `Error: ${e}`, pending: false, error: true } : x)),
-        }));
-      } finally {
-        setBusy(false);
-      }
+      await streamMessage(text, thread, {
+        onStep: (label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
+        onDone: (reply, extras) => {
+          patch((x) => ({ ...x, text: reply, extras, pending: false }));
+          upsertSession(thread, {
+            title: isFirst ? text.slice(0, 80) : undefined,
+            preview: reply.slice(0, 160),
+            updated_at: new Date().toISOString(),
+          }).catch(() => {});
+          refreshSessions();
+        },
+        onError: (msg) => patch((x) => ({ ...x, text: `Error: ${msg}`, pending: false, error: true })),
+      });
+      setBusy(false);
     },
-    [thread, me, byThread, refreshSessions]
+    [thread, byThread, refreshSessions]
   );
 
   return (

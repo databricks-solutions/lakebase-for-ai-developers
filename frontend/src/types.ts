@@ -32,6 +32,7 @@ export interface ChatMessage {
   extras?: AgentExtras;
   pending?: boolean;
   error?: boolean;
+  steps?: string[]; // live progress labels while streaming
 }
 
 export interface Session {

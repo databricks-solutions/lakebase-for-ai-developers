@@ -113,7 +113,7 @@ function Bubble({ m }: { m: ChatMessage }) {
         }}
       >
         {m.error ? <span style={{ color: "var(--danger)" }}>{m.text}</span>
-          : m.pending ? <Thinking />
+          : m.pending ? <Thinking steps={m.steps} />
           : m.text}
       </div>
       {m.extras && !m.pending && <Extras extras={m.extras} />}
@@ -121,11 +121,22 @@ function Bubble({ m }: { m: ChatMessage }) {
   );
 }
 
-function Thinking() {
+function Thinking({ steps }: { steps?: string[] }) {
+  const cursor = <span style={{ animation: "cursor-blink 1s steps(1) infinite" }}>▋</span>;
+  if (!steps || steps.length === 0) {
+    return <span style={{ color: "var(--fg-2)" }}>Thinking{cursor}</span>;
+  }
   return (
-    <span style={{ color: "var(--fg-2)" }}>
-      Thinking<span style={{ animation: "cursor-blink 1s steps(1) infinite" }}>▋</span>
-    </span>
+    <div style={{ color: "var(--fg-2)", display: "grid", gap: 3, fontSize: "var(--fs-body-sm)" }}>
+      {steps.map((s, i) => {
+        const current = i === steps.length - 1;
+        return (
+          <div key={i} style={{ opacity: current ? 1 : 0.5 }}>
+            {current ? "› " : "✓ "}{s}{current ? cursor : null}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

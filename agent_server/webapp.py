@@ -27,8 +27,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
+import json
+import uuid
+
 from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_server.config import settings
@@ -382,6 +385,77 @@ async def seed_demo_memories(request: Request) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("seed memory %s failed: %s", key, exc)
     return {"namespace": list(ns), "written": written}
+
+
+# ── Streaming chat (SSE) ──────────────────────────────────────────────────────────────────
+# Drives the graph and streams live step progress (route → gather → plan → gate) + the final
+# answer. Runs behind the OBO middleware (so Knowledge/Genie call as the user) and reuses the
+# agent's graph + output shaping — it does not modify the team's /invocations handler.
+
+_STEP_LABELS = {
+    "supervisor": "Routing the question…",
+    "gather_knowledge": "Searching the knowledge corpus…",
+    "gather_analytics": "Querying Genie…",
+    "gather_operational": "Running the operational query…",
+    "gather_memory": "Recalling prior decisions…",
+    "planner": "Composing the recommendation…",
+    "hitl_review": "Preparing the approval…",
+    "commit": "Finalizing…",
+}
+
+
+def _sse(obj: dict) -> bytes:
+    return f"data: {json.dumps(obj, default=str)}\n\n".encode("utf-8")
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: Request, body: dict[str, Any] = Body(default={})):
+    caller = caller_identity(request)
+    question = (body.get("question") or "").strip()
+    thread_id = str(body.get("thread_id") or uuid.uuid4().hex)
+    user_id = caller.email
+
+    async def gen():
+        try:
+            from agent_server.agent import LAKEBASE_CONFIG, _custom_outputs, _final_text
+            from agent_server.graph.build_graph import build_graph
+            from agent_server.lakebase import acquire_lakebase_resources
+
+            yield _sse({"type": "step", "label": "Starting…"})
+            async with acquire_lakebase_resources(LAKEBASE_CONFIG) as (checkpointer, store):
+                config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "store": store}}
+                graph = build_graph(checkpointer=checkpointer)
+                interrupt_payload = None
+                seen: set[str] = set()
+                async for chunk in graph.astream(
+                    {"question": question, "user_id": user_id}, config, stream_mode="updates"
+                ):
+                    if "__interrupt__" in chunk:
+                        intr = chunk["__interrupt__"]
+                        interrupt_payload = intr[0].value if intr else None
+                        continue
+                    for node in chunk.keys():
+                        if node in _STEP_LABELS and node not in seen:
+                            seen.add(node)
+                            yield _sse({"type": "step", "node": node, "label": _STEP_LABELS[node]})
+                snapshot = await graph.aget_state(config)
+                state = dict(snapshot.values) if snapshot else {}
+                yield _sse({
+                    "type": "done",
+                    "thread_id": thread_id,
+                    "text": _final_text(state, interrupt_payload),
+                    "extras": _custom_outputs(state, interrupt_payload),
+                })
+        except Exception as exc:  # surface as a stream error, never a 500 mid-stream
+            logger.warning("chat_stream failed: %s", exc)
+            yield _sse({"type": "error", "error": str(exc)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        # X-Accel-Buffering: no is load-bearing — keeps the Apps proxy from buffering the stream.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 app.include_router(router)

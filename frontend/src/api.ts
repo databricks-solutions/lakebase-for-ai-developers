@@ -41,6 +41,56 @@ function extractText(output: any[]): string {
 }
 
 /**
+ * Streaming turn: POSTs to the SSE endpoint and emits live step progress as the graph runs,
+ * then the final answer + extras. Identity (OBO) + access scope are derived server-side from the
+ * forwarded token, so we only send the question + thread_id.
+ */
+export async function streamMessage(
+  text: string,
+  threadId: string,
+  handlers: {
+    onStep?: (label: string) => void;
+    onDone: (text: string, extras: AgentExtras) => void;
+    onError: (msg: string) => void;
+  }
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: text, thread_id: threadId }),
+    });
+  } catch (e) {
+    handlers.onError(String(e));
+    return;
+  }
+  if (!res.ok || !res.body) {
+    handlers.onError(`${res.status} ${res.statusText}`);
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const frames = buf.split("\n\n");
+    buf = frames.pop() ?? "";
+    for (const frame of frames) {
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      let obj: any;
+      try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (obj.type === "step" && obj.label) handlers.onStep?.(obj.label);
+      else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", (obj.extras ?? {}) as AgentExtras);
+      else if (obj.type === "error") handlers.onError(obj.error || "stream error");
+    }
+  }
+}
+
+/**
  * Send one turn to the agent. Context is server-side: we pass thread_id (Lakebase checkpoint)
  * and user_id, and only the latest message — the graph resumes prior turns from its checkpoint.
  */
