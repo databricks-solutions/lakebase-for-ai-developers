@@ -133,6 +133,15 @@ class Settings(BaseModel):
 
     # --- MLflow ---
     mlflow_experiment_id: str | None = Field(default=None, alias="MLFLOW_EXPERIMENT_ID")
+    # MLflow 3 Unity-Catalog tracing (so traces land from a Databricks App, where the default
+    # artifact-storage export is blocked by egress). Bind the experiment to this UC schema; the
+    # SQL warehouse backs trace storage. Catalog defaults to uc_catalog; warehouse to warehouse_id.
+    mlflow_trace_catalog: str | None = Field(default=None, alias="MLFLOW_TRACE_CATALOG")
+    mlflow_trace_schema: str | None = Field(default=None, alias="MLFLOW_TRACE_SCHEMA")
+    mlflow_trace_table_prefix: str = Field(default="scp", alias="MLFLOW_TRACE_TABLE_PREFIX")
+    mlflow_tracing_warehouse_id: str | None = Field(
+        default=None, alias="MLFLOW_TRACING_SQL_WAREHOUSE_ID"
+    )
 
     # --- Derived helpers ---
     @property

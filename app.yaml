@@ -16,6 +16,16 @@ env:
     value: "databricks"
   - name: MLFLOW_REGISTRY_URI
     value: "databricks-uc"
+  # MLflow 3 Unity-Catalog tracing — traces land in this UC schema (reachable from the App,
+  # unlike the default artifact-storage export). Schema created + app-SP granted out of band.
+  - name: MLFLOW_TRACE_CATALOG
+    value: "serverless_stable_yau46e_catalog"
+  - name: MLFLOW_TRACE_SCHEMA
+    value: "mlflow_traces"
+  - name: MLFLOW_TRACE_TABLE_PREFIX
+    value: "scp"
+  - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
+    value: "a7760b312858e85b"
 
   # Lakebase (autoscaling) — the app SP mints OAuth DB creds from these coords.
   - name: LAKEBASE_AUTOSCALING_PROJECT
