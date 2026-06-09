@@ -15,10 +15,12 @@ export function ChatPanel({
   messages,
   busy,
   onSend,
+  onResume,
 }: {
   messages: ChatMessage[];
   busy: boolean;
   onSend: (text: string) => void;
+  onResume: (verdict: "approved" | "rejected") => void;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -43,7 +45,7 @@ export function ChatPanel({
           {empty ? (
             <Welcome onPick={(s) => onSend(s)} />
           ) : (
-            messages.map((m) => <Bubble key={m.id} m={m} />)
+            messages.map((m) => <Bubble key={m.id} m={m} onResume={onResume} busy={busy} />)
           )}
           <div ref={endRef} />
         </div>
@@ -94,7 +96,7 @@ function Welcome({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-function Bubble({ m }: { m: ChatMessage }) {
+function Bubble({ m, onResume, busy }: { m: ChatMessage; onResume: (v: "approved" | "rejected") => void; busy: boolean }) {
   const isUser = m.role === "user";
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", animation: "fade-up var(--dur-base) var(--ease-out)" }}>
@@ -116,7 +118,7 @@ function Bubble({ m }: { m: ChatMessage }) {
           : m.pending ? <Thinking steps={m.steps} />
           : m.text}
       </div>
-      {m.extras && !m.pending && <Extras extras={m.extras} />}
+      {m.extras && !m.pending && <Extras extras={m.extras} onResume={onResume} busy={busy} />}
     </div>
   );
 }
@@ -140,7 +142,7 @@ function Thinking({ steps }: { steps?: string[] }) {
   );
 }
 
-function Extras({ extras }: { extras: NonNullable<ChatMessage["extras"]> }) {
+function Extras({ extras, onResume, busy }: { extras: NonNullable<ChatMessage["extras"]>; onResume: (v: "approved" | "rejected") => void; busy: boolean }) {
   const chips: string[] = [];
   if (extras.route) chips.push(`route: ${extras.route}`);
   if (extras.status) chips.push(extras.status);
@@ -163,12 +165,9 @@ function Extras({ extras }: { extras: NonNullable<ChatMessage["extras"]> }) {
           <p style={{ margin: "6px 0", fontWeight: 500 }}>{appr.summary ?? "This action needs sign-off."}</p>
           {appr.est_cost_usd != null && <p style={{ color: "var(--fg-2)", fontSize: "var(--fs-body-sm)" }}>Est. cost: ${Number(appr.est_cost_usd).toLocaleString()}</p>}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button style={{ ...sendBtn(false), background: "var(--db-green-600)" }}>Approve</button>
-            <button style={{ ...peekBtn }}>Reject</button>
+            <button disabled={busy} onClick={() => onResume("approved")} style={{ ...sendBtn(busy), background: busy ? "var(--db-navy-300)" : "var(--db-green-600)" }}>Approve</button>
+            <button disabled={busy} onClick={() => onResume("rejected")} style={{ ...peekBtn, opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" }}>Reject</button>
           </div>
-          <p style={{ color: "var(--fg-3)", fontSize: 11, marginTop: 8 }}>
-            HITL resume wiring is in progress (follow-up #2) — buttons are a placeholder.
-          </p>
         </div>
       )}
       {extras.operational_sql && (

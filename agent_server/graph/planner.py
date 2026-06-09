@@ -50,10 +50,14 @@ Return fields:
 - summary: one-line recommendation a planner can act on.
 - actions: 1-5 concrete, ordered steps (e.g. "Expedite a 200-unit reorder of SKU-1001 from an
   alternate supplier").
-- is_action_bearing: true if the recommendation COMMITS SPEND or is RISKY/IRREVERSIBLE — it tells
-  the planner to reorder, expedite, re-source, pre-buy, quarantine, or hold. false for purely
-  INFORMATIONAL answers that only report/look up/aggregate (counts, totals, status, "which
-  suppliers are at risk", "what do the contracts say"). When in doubt, prefer true.
+- is_action_bearing: true if the recommendation COMMITS NEW SPEND or is RISKY/IRREVERSIBLE — it
+  tells the planner to reorder, expedite, re-source, pre-buy, quarantine, or hold for the first
+  time. false for purely INFORMATIONAL answers that only report/look up/aggregate (counts, totals,
+  status, "which suppliers are at risk", "what do the contracts say"), AND false for answers that
+  merely RECALL, SUMMARIZE, or CONTINUE a decision already made in a prior conversation ("what did
+  we decide…", "continue this morning's escalation", "remind me…") — these report or follow up on
+  an existing decision; they do not commit new action. Only set true when you are proposing a NEW
+  commitment beyond what was already decided. When in doubt about a genuinely new action, prefer true.
 - est_cost_usd: your best dollar estimate of executing the recommended actions (reorder / expedite
   / re-source cost). Return 0 for a purely informational answer (no spend committed). Only return
   null if it is action-bearing but you genuinely cannot estimate.

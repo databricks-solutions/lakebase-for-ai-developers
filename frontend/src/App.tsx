@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
-import { getMe, listSessions, streamMessage, upsertSession } from "./api";
+import { getMe, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
 import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
@@ -56,6 +56,26 @@ export default function App() {
     [thread, byThread, refreshSessions]
   );
 
+  // HITL: approve/reject the awaiting-approval message in the current thread → resume the run.
+  const onResume = useCallback(
+    async (verdict: "approved" | "rejected") => {
+      const msgs = byThread[thread] ?? [];
+      const target = [...msgs].reverse().find((m) => m.role === "assistant" && m.extras?.approval_request);
+      if (!target) return;
+      const patch = (fn: (x: ChatMessage) => ChatMessage) =>
+        setByThread((m) => ({ ...m, [thread]: (m[thread] ?? []).map((x) => (x.id === target.id ? fn(x) : x)) }));
+      patch((x) => ({ ...x, pending: true, error: false, text: "", extras: undefined, steps: [`Recording ${verdict} decision…`] }));
+      setBusy(true);
+      await resumeMessage(thread, verdict, {
+        onStep: (label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
+        onDone: (reply, extras) => { patch((x) => ({ ...x, text: reply, extras, pending: false })); refreshSessions(); },
+        onError: (msg) => patch((x) => ({ ...x, text: `Error: ${msg}`, pending: false, error: true })),
+      });
+      setBusy(false);
+    },
+    [thread, byThread, refreshSessions]
+  );
+
   return (
     <TourProvider>
       <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
@@ -73,7 +93,7 @@ export default function App() {
             <button data-tour="inspect" onClick={() => setExplorerOpen(true)} style={inspectBtn}>⚙ Inspect backend</button>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
-            <ChatPanel messages={messages} busy={busy} onSend={onSend} />
+            <ChatPanel messages={messages} busy={busy} onSend={onSend} onResume={onResume} />
           </div>
         </main>
         <ExplorerDrawer open={explorerOpen} onClose={() => setExplorerOpen(false)} />

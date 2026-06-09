@@ -45,21 +45,19 @@ function extractText(output: any[]): string {
  * then the final answer + extras. Identity (OBO) + access scope are derived server-side from the
  * forwarded token, so we only send the question + thread_id.
  */
-export async function streamMessage(
-  text: string,
-  threadId: string,
-  handlers: {
-    onStep?: (label: string) => void;
-    onDone: (text: string, extras: AgentExtras) => void;
-    onError: (msg: string) => void;
-  }
-): Promise<void> {
+interface StreamHandlers {
+  onStep?: (label: string) => void;
+  onDone: (text: string, extras: AgentExtras) => void;
+  onError: (msg: string) => void;
+}
+
+async function consumeSSE(payload: Record<string, unknown>, handlers: StreamHandlers): Promise<void> {
   let res: Response;
   try {
     res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: text, thread_id: threadId }),
+      body: JSON.stringify(payload),
     });
   } catch (e) {
     handlers.onError(String(e));
@@ -89,6 +87,17 @@ export async function streamMessage(
     }
   }
 }
+
+/** New turn — streams step progress then the final answer. */
+export const streamMessage = (text: string, threadId: string, handlers: StreamHandlers): Promise<void> =>
+  consumeSSE({ question: text, thread_id: threadId }, handlers);
+
+/** Resume a paused HITL run with the approval verdict — streams the commit then the result. */
+export const resumeMessage = (
+  threadId: string,
+  verdict: "approved" | "rejected",
+  handlers: StreamHandlers
+): Promise<void> => consumeSSE({ thread_id: threadId, verdict }, handlers);
 
 /**
  * Send one turn to the agent. Context is server-side: we pass thread_id (Lakebase checkpoint)

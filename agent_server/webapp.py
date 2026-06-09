@@ -413,22 +413,35 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
     caller = caller_identity(request)
     question = (body.get("question") or "").strip()
     thread_id = str(body.get("thread_id") or uuid.uuid4().hex)
+    verdict = body.get("verdict")  # "approved" | "rejected" → resume a paused HITL run
+    note = body.get("note")
     user_id = caller.email
 
     async def gen():
         try:
             from agent_server.agent import LAKEBASE_CONFIG, _custom_outputs, _final_text
+            from agent_server.contracts import HITLDecision, HITLVerdict
             from agent_server.graph.build_graph import build_graph
             from agent_server.lakebase import acquire_lakebase_resources
+            from langgraph.types import Command
 
-            yield _sse({"type": "step", "label": "Starting…"})
+            # Resume the paused run with the verdict, or start a fresh question.
+            if verdict:
+                graph_input: Any = Command(resume=HITLDecision(
+                    verdict=HITLVerdict(verdict), user_id=user_id, note=note,
+                ).model_dump())
+                yield _sse({"type": "step", "label": f"Recording {verdict} decision…"})
+            else:
+                graph_input = {"question": question, "user_id": user_id}
+                yield _sse({"type": "step", "label": "Starting…"})
+
             async with acquire_lakebase_resources(LAKEBASE_CONFIG) as (checkpointer, store):
                 config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "store": store}}
                 graph = build_graph(checkpointer=checkpointer)
                 interrupt_payload = None
                 seen: set[str] = set()
                 async for chunk in graph.astream(
-                    {"question": question, "user_id": user_id}, config, stream_mode="updates"
+                    graph_input, config, stream_mode="updates"
                 ):
                     if "__interrupt__" in chunk:
                         intr = chunk["__interrupt__"]
