@@ -42,11 +42,13 @@ def _use_stubs() -> bool:
 def knowledge_node(state: AgentState) -> dict:
     question = state["question"]
     if _use_stubs():
-        result: KnowledgeResult = query_knowledge_fake(question)
-    else:
+        return {"knowledge_result": query_knowledge_fake(question)}
+    try:
         from agent_server.tools.knowledge_tool import query_knowledge_impl
-        result = query_knowledge_impl(question)
-    return {"knowledge_result": result}
+        return {"knowledge_result": query_knowledge_impl(question)}
+    except Exception as exc:  # one tool down must not 500 the whole run
+        logger.warning("knowledge gather failed (degrading to empty): %s", exc)
+        return {"knowledge_result": KnowledgeResult(query=question, passages=[])}
 
 
 # ── Analytics (Genie) ─────────────────────────────────────────────────────────────────
@@ -54,11 +56,13 @@ def knowledge_node(state: AgentState) -> dict:
 def analytics_node(state: AgentState) -> dict:
     question = state["question"]
     if _use_stubs():
-        result: GenieResult = ask_genie_fake(question)
-    else:
+        return {"analytics_result": ask_genie_fake(question)}
+    try:
         from agent_server.tools.genie_tool import ask_genie_impl
-        result = ask_genie_impl(question)
-    return {"analytics_result": result}
+        return {"analytics_result": ask_genie_impl(question)}
+    except Exception as exc:  # degrade, don't fail the run
+        logger.warning("analytics gather failed (degrading to empty): %s", exc)
+        return {"analytics_result": GenieResult(question=question, error=str(exc))}
 
 
 # ── Operational (Lakebase hybrid — STUB always; WS2 replaces) ────────────────────────
@@ -67,11 +71,13 @@ def operational_node(state: AgentState) -> dict:
     question = state["question"]
     user_id = state.get("user_id", "unknown")
     if _use_stubs():
-        result: OperationalResult = query_operational_fake(question, user_id)
-    else:
+        return {"operational_result": query_operational_fake(question, user_id)}
+    try:
         from agent_server.tools.operational_tool import query_operational_impl
-        result = query_operational_impl(question, user_id)
-    return {"operational_result": result}
+        return {"operational_result": query_operational_impl(question, user_id)}
+    except Exception as exc:  # degrade, don't fail the run
+        logger.warning("operational gather failed (degrading to empty): %s", exc)
+        return {"operational_result": OperationalResult(question=question, sql="", rows=[])}
 
 
 # ── Memory (long-term recall over the Lakebase store — hydrate-and-use) ───────────────
