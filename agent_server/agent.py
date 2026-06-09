@@ -91,21 +91,29 @@ def _setup_mlflow_experiment() -> None:
                 logger.warning("UC trace location unavailable; default tracing: %s", exc)
                 trace_location = None
 
-        if settings.mlflow_experiment_id and trace_location is None:
-            mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+        if settings.mlflow_experiment_id:
+            # Bind to the explicitly-configured (shared project) experiment. Attaching a UC trace
+            # destination needs the experiment NAME, so resolve it from the id. NOTE: the target
+            # experiment must have NO existing traces for a UC destination to bind.
+            if trace_location is not None:
+                exp = mlflow.get_experiment(settings.mlflow_experiment_id)
+                mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
+            else:
+                mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
         elif mlflow.get_tracking_uri() == "databricks":
             from databricks.sdk import WorkspaceClient
 
             me = WorkspaceClient().current_user.me().user_name
+            # No explicit experiment → a dedicated per-user experiment (UC dest needs trace-free).
+            name = f"/Users/{me}/supply-chain-planner-uc" if trace_location is not None else f"/Users/{me}/supply-chain-planner"
             if trace_location is not None:
-                # A UC trace destination only binds to an experiment with NO existing traces, so
-                # use a dedicated experiment for UC-backed tracing (separate from any prior one).
-                name = f"/Users/{me}/supply-chain-planner-uc"
                 mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
-                logger.info("MLflow UC tracing → %s.%s (prefix=%s) on %s",
-                            cat, sch, settings.mlflow_trace_table_prefix, name)
             else:
-                mlflow.set_experiment(f"/Users/{me}/supply-chain-planner")
+                mlflow.set_experiment(name)
+        if trace_location is not None:
+            logger.info("MLflow UC tracing → %s.%s (prefix=%s) on experiment %s",
+                        cat, sch, settings.mlflow_trace_table_prefix,
+                        settings.mlflow_experiment_id or f"/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
         logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
 

@@ -16,6 +16,9 @@ env:
     value: "databricks"
   - name: MLFLOW_REGISTRY_URI
     value: "databricks-uc"
+  # Log traces to the shared project experiment so the team sees them in its Traces tab.
+  - name: MLFLOW_EXPERIMENT_ID
+    value: "1699732530746200"
   # MLflow 3 Unity-Catalog tracing — traces land in this UC schema (reachable from the App,
   # unlike the default artifact-storage export). Schema created + app-SP granted out of band.
   - name: MLFLOW_TRACE_CATALOG
