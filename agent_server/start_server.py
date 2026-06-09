@@ -36,7 +36,10 @@ logger = logging.getLogger(__name__)
 
 agent_server = LongRunningAgentServer(
     "ResponsesAgent",
-    enable_chat_proxy=True,
+    # Disabled: the chat proxy serves "/" by forwarding to a Next.js app on CHAT_APP_PORT (3000)
+    # we don't run — it 503s. Our own React SPA is served at /ui by agent_server.webapp, and "/"
+    # redirects there. Re-enable only if reinstating the template's separate chat frontend.
+    enable_chat_proxy=False,
     db_instance_name=LAKEBASE_CONFIG.instance_name,
     db_autoscaling_endpoint=LAKEBASE_CONFIG.autoscaling_endpoint,
     db_project=LAKEBASE_CONFIG.autoscaling_project,

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_server.config import settings
@@ -315,6 +315,13 @@ async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] 
 
 
 app.include_router(router)
+
+
+# Bare "/" → the SPA at /ui (the built assets use the /ui/ base path, so we redirect rather
+# than mount at root). With the chat proxy disabled, "/" is otherwise unhandled → 503.
+@app.get("/")
+def _root_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/ui/")
 
 
 # ── Serve the SPA (built React app). Mounted last so /api/* + /invocations win. ─────────────
