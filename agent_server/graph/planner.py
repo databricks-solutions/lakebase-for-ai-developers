@@ -30,10 +30,21 @@ logger = logging.getLogger(__name__)
 # Above this estimated cost the gate trips and routes to HITL approval.
 APPROVAL_COST_THRESHOLD_USD = 50_000.0
 
+
+def approvals_namespace(user_id: str) -> tuple[str, str]:
+    """The long-term store namespace for a user's prior decisions. Single source of truth so
+    `commit_node` (write) and the memory recall node (read) always agree. LangGraph store
+    namespace labels can't contain '.', so map it to '-'."""
+    return ("approvals", (user_id or "unknown").replace(".", "-"))
+
 _SYSTEM_PROMPT = """\
 You are the planner for a supply-chain planning copilot. Given a planner's question and the
-evidence gathered by retrieval/analytics/operational agents, produce a concise, actionable
-recommendation.
+evidence gathered by retrieval/analytics/operational agents — plus the planner's own prior
+decisions recalled from long-term memory — produce a concise, actionable recommendation.
+
+If the question refers to an earlier conversation ("what did we decide…", "continue this
+morning's escalation", "last time"), ground your answer in the recalled prior decisions and
+say what was decided before; only escalate again if genuinely new action is needed.
 
 Return fields:
 - summary: one-line recommendation a planner can act on.
@@ -88,6 +99,16 @@ def _evidence_block(state: AgentState) -> str:
     if (kr := state.get("knowledge_result")) and kr.passages:
         lines = [f"  - [{p.source}] {(p.content or '')[:160]}" for p in kr.passages[:4]]
         parts.append("Knowledge passages:\n" + "\n".join(lines))
+    if (mr := state.get("memory_result")) and mr.memories:
+        lines = [
+            f"  - [{m.verdict or 'decision'}] {m.question or ''} → {m.summary or ''}"
+            + (f" (note: {m.note})" if m.note else "")
+            for m in mr.memories[:5]
+        ]
+        parts.append(
+            "Your prior decisions (long-term memory — recall and build on these when the "
+            "question refers to earlier conversations):\n" + "\n".join(lines)
+        )
     return "\n\n".join(parts) if parts else "No gather results were returned."
 
 
@@ -220,7 +241,7 @@ async def commit_node(state: AgentState, config: RunnableConfig) -> dict:
     persisted = False
     if store is not None:
         try:
-            namespace = ("approvals", user_id.replace(".", "-"))
+            namespace = approvals_namespace(user_id)
             value = {
                 "question": state.get("question"),
                 "recommendation": rec.model_dump() if rec else None,

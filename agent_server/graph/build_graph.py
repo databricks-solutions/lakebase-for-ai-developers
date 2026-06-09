@@ -21,6 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from agent_server.graph.gather_nodes import (
     analytics_node,
     knowledge_node,
+    memory_node,
     operational_node,
     route_to_gatherers,
 )
@@ -34,7 +35,7 @@ from agent_server.graph.state import AgentState
 from agent_server.graph.supervisor import supervisor_node
 
 
-GATHER_NODE_NAMES = ("gather_knowledge", "gather_analytics", "gather_operational")
+GATHER_NODE_NAMES = ("gather_knowledge", "gather_analytics", "gather_operational", "gather_memory")
 
 
 def build_graph(checkpointer=None):
@@ -52,6 +53,7 @@ def build_graph(checkpointer=None):
     builder.add_node("gather_knowledge", knowledge_node)
     builder.add_node("gather_analytics", analytics_node)
     builder.add_node("gather_operational", operational_node)
+    builder.add_node("gather_memory", memory_node)
     builder.add_node("planner", planner_node)
     builder.add_node("hitl_review", hitl_review_node)
     builder.add_node("commit", commit_node)

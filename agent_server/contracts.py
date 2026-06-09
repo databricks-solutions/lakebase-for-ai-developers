@@ -93,9 +93,30 @@ class OperationalResult(BaseModel):
     rows: list[OperationalRow]
 
 
+# ── Memory agent (long-term recall over the Lakebase LangGraph store) ─────────────────────
+
+class MemoryItem(BaseModel):
+    """One recalled prior decision/conversation from the long-term store — what `commit_node`
+    persisted under the user's `("approvals", user_id)` namespace."""
+
+    thread_id: str | None = None
+    question: str | None = None
+    summary: str | None = None  # the prior recommendation's one-liner
+    verdict: str | None = None  # approved / rejected / edited
+    note: str | None = None
+    score: float | None = None  # semantic relevance to the current question
+
+
+class MemoryResult(BaseModel):
+    query: str
+    memories: list[MemoryItem] = Field(default_factory=list)
+
+
 # ── Router / supervisor ──────────────────────────────────────────────────────────────────
 
-AgentName = Literal["knowledge", "analytics", "operational"]
+# "memory" recalls the user's own prior decisions/conversations (long-term store). It always
+# runs (hydrate-and-use); the router may also name it to prioritize a pure-recall question.
+AgentName = Literal["knowledge", "analytics", "operational", "memory"]
 
 
 class RouterDecision(BaseModel):

@@ -322,6 +322,43 @@ async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] 
     return {"thread_id": thread_id, **value}
 
 
+@router.get("/_seed_demo_memories")
+async def seed_demo_memories(request: Request) -> dict[str, Any]:
+    """DEMO-ONLY: write a couple of the caller's "prior decisions" into the long-term store
+    (the same namespace + shape commit_node writes) so the cross-conversation recall questions
+    — "what did we decide about the Acme delay yesterday?", "continue this morning's escalation"
+    — have something to recall. Visit once in the browser. Idempotent (overwrites by key)."""
+    from agent_server.graph.planner import approvals_namespace
+
+    caller = caller_identity(request)
+    ns = approvals_namespace(caller.email)
+    demos = {
+        "demo-acme-delay": {
+            "question": "How should we handle the Acme delivery delay?",
+            "recommendation": {"summary": "Hold firm; expedite a 200-unit bridge order of "
+                                          "SKU-1001 from DuPont to cover the Acme slip."},
+            "verdict": "approved",
+            "note": "Decided yesterday — revisit if Acme slips past Friday.",
+        },
+        "demo-morning-escalation": {
+            "question": "Escalate the Henkel SKU-1001 coverage gap this morning?",
+            "recommendation": {"summary": "Escalated SKU-1001 quality containment — prioritize the "
+                                          "Henkel cracking cluster; 40 on-hand vs a 500-unit open PO."},
+            "verdict": "approved",
+            "note": "This morning's escalation — pending supplier confirmation.",
+        },
+    }
+    store = _store()
+    written: list[str] = []
+    for key, value in demos.items():
+        try:
+            await store.aput(ns, key, value)
+            written.append(key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("seed memory %s failed: %s", key, exc)
+    return {"namespace": list(ns), "written": written}
+
+
 app.include_router(router)
 
 
