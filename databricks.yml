@@ -201,111 +201,117 @@ resources:
       name: "supply-chain-planner-setup-and-seed"
       tasks:
         # Idempotent: create the operational schema + the MLflow trace schema (+ volume) up front.
-        # The seed scripts read config through agent_server.config — and serverless tasks can't take
-        # env vars — so the bundle passes catalog/Lakebase coords as task parameters. Python tasks
-        # get `ALIAS=value` argv pairs (&seed_params); notebooks get the same names as job widgets
-        # (&seed_widgets). config._job_param_overrides() reads both. Defined once, referenced below.
+        # Serverless tasks can't take env vars, and they're exec'd without __file__/sys.path set —
+        # so PYTHON tasks run through data/_seed_task.py, which fixes sys.path and applies the
+        # config JSON (&seed_cfg) to os.environ before running the real script. NOTEBOOK tasks get
+        # the same config as job widgets (&seed_widgets), read by config._job_param_overrides().
         - task_key: bootstrap_schemas
           spark_python_task:
-            python_file: ./data/00_bootstrap_schemas.py
-            parameters: &seed_params
-              - UC_CATALOG=${var.uc_catalog}
-              - UC_SCHEMA=${var.uc_schema}
-              - UC_VOLUME=documents
-              - LAKEBASE_AUTOSCALING_PROJECT=${var.lakebase_project}
-              - LAKEBASE_AUTOSCALING_BRANCH=${var.lakebase_branch}
-              - LAKEBASE_AUTOSCALING_ENDPOINT=${var.lakebase_endpoint}
-              - LAKEBASE_DATABASE=${var.lakebase_database}
-              - LAKEBASE_OPERATIONAL_SCHEMA=public
-              - LAKEBASE_UC_CATALOG=${var.lakebase_uc_catalog}
-              - DATABRICKS_EMBEDDING_ENDPOINT=${var.embedding_endpoint}
-              - VECTOR_SEARCH_ENDPOINT=${var.vector_search_endpoint}
-              - MLFLOW_TRACE_CATALOG=${var.uc_catalog}
-              - MLFLOW_TRACE_SCHEMA=${var.mlflow_trace_schema}
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/00_bootstrap_schemas.py
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.lakebase_uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---
+        # These three are notebook-source files but use only get_spark()/spark.sql — no dbutils or
+        # magics — so they run as launcher Python tasks like the rest (the notebook import-path
+        # bootstrap can't find the bundle root on serverless; the launcher fixes sys.path + env).
         - task_key: create_operational_schema
           depends_on: [{ task_key: bootstrap_schemas }]
-          notebook_task:
-            notebook_path: ./data/genie/01_create_operational_schema.py
-            base_parameters: &seed_widgets
-              UC_CATALOG: ${var.uc_catalog}
-              UC_SCHEMA: ${var.uc_schema}
-              UC_VOLUME: documents
-              LAKEBASE_AUTOSCALING_PROJECT: ${var.lakebase_project}
-              LAKEBASE_AUTOSCALING_BRANCH: ${var.lakebase_branch}
-              LAKEBASE_AUTOSCALING_ENDPOINT: ${var.lakebase_endpoint}
-              LAKEBASE_DATABASE: ${var.lakebase_database}
-              LAKEBASE_OPERATIONAL_SCHEMA: public
-              LAKEBASE_UC_CATALOG: ${var.lakebase_uc_catalog}
-              DATABRICKS_EMBEDDING_ENDPOINT: ${var.embedding_endpoint}
-              VECTOR_SEARCH_ENDPOINT: ${var.vector_search_endpoint}
-              MLFLOW_TRACE_CATALOG: ${var.uc_catalog}
-              MLFLOW_TRACE_SCHEMA: ${var.mlflow_trace_schema}
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/genie/01_create_operational_schema.py
+              - *seed_cfg
+          environment_key: seed
         - task_key: generate_operational_data
           depends_on: [{ task_key: create_operational_schema }]
-          notebook_task:
-            notebook_path: ./data/operational/01_generate_genie_tables.py
-            base_parameters: *seed_widgets
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/01_generate_genie_tables.py
+              - *seed_cfg
+          environment_key: seed
         - task_key: pre_seed_pgvector
           depends_on: [{ task_key: generate_operational_data }]
           spark_python_task:
-            python_file: ./data/operational/02_pre_seed_pgvector.py
-            parameters: *seed_params
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/02_pre_seed_pgvector.py
+              - *seed_cfg
           environment_key: seed
         - task_key: sync_to_lakebase
           depends_on: [{ task_key: pre_seed_pgvector }]
           spark_python_task:
-            python_file: ./data/operational/03_sync_to_lakebase.py
-            parameters: *seed_params
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/03_sync_to_lakebase.py
+              - *seed_cfg
           environment_key: seed
         - task_key: verify_hybrid_query
           depends_on: [{ task_key: sync_to_lakebase }]
           spark_python_task:
-            python_file: ./data/operational/04_verify_hybrid_query.py
-            parameters: *seed_params
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/04_verify_hybrid_query.py
+              - *seed_cfg
           environment_key: seed
+        # Genie space only needs the operational Delta tables — decoupled from the Lakebase
+        # sub-chain so a Lakebase issue doesn't block it.
         - task_key: create_genie_space
-          depends_on: [{ task_key: verify_hybrid_query }]
+          depends_on: [{ task_key: generate_operational_data }]
           spark_python_task:
-            python_file: ./data/genie/02_create_genie_space.py
-            parameters: *seed_params
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/genie/02_create_genie_space.py
+              - *seed_cfg
           environment_key: seed
 
         # --- Knowledge chain → Vector Search (independent of the Lakebase chain) ---
         - task_key: upload_pdfs
           depends_on: [{ task_key: bootstrap_schemas }]
           spark_python_task:
-            python_file: ./data/knowledge/01_upload_pdfs.py
-            parameters: *seed_params
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/knowledge/01_upload_pdfs.py
+              - *seed_cfg
           environment_key: seed
         - task_key: parse_and_chunk
           depends_on: [{ task_key: upload_pdfs }]
-          notebook_task:
-            notebook_path: ./data/knowledge/02_parse_and_chunk.py
-            base_parameters: *seed_widgets
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/knowledge/02_parse_and_chunk.py
+              - *seed_cfg
+          environment_key: seed
         - task_key: build_vs_index
           depends_on: [{ task_key: parse_and_chunk }]
           spark_python_task:
-            python_file: ./data/knowledge/03_build_vs_index.py
-            parameters: *seed_params
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/knowledge/03_build_vs_index.py
+              - *seed_cfg
           environment_key: seed
 
+      # Lean serverless environment. Only the packages the seed scripts actually import that
+      # AREN'T already in the serverless base: psycopg (Lakebase, via _lakebase.py) and
+      # pypdf + langchain-text-splitters (knowledge/02). Everything else they need —
+      # databricks-sdk (Genie/VS/embeddings/synced-tables), pyspark, mlflow, pydantic — ships in
+      # the serverless base, so requesting it here only risks version conflicts. (The original fat
+      # list, esp. databricks-langchain[memory], made pip's resolver backtrack and fail to install.)
       environments:
         - environment_key: seed
           spec:
             client: "3"
             dependencies:
-              - "psycopg[binary,pool]>=3.2.0"
-              - "pgvector>=0.3.0"
-              - "databricks-langchain[memory]>=0.19.0"
-              - "databricks-sdk>=0.106.0"
-              - "databricks-vectorsearch>=0.50,<0.74"
-              - "dbldatagen>=0.4.0"
-              - "faker>=30.0.0"
-              - "pypdf>=4.0.0"
-              - "mlflow>=3.11"
+              - "psycopg[binary]"
+              - "pypdf"
+              - "langchain-text-splitters"
+              # The serverless base SDK is too old for w.postgres (Lakebase autoscaling). Upgrade it
+              # for the operational tasks (02/03/04). Small dep tree — unlike databricks-langchain,
+              # it doesn't make the resolver backtrack.
+              - "databricks-sdk>=0.81"
 
 targets:
   # Personal iteration on YOUR workspace. mode:development prefixes resource names with your user.

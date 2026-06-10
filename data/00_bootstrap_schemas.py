@@ -34,10 +34,17 @@ volume = settings.uc_volume
 trace_catalog = settings.mlflow_trace_catalog or settings.uc_catalog
 trace_schema = settings.mlflow_trace_schema or "mlflow_traces"
 
+# The synced operational tables (03_sync_to_lakebase) register at
+# <lakebase_uc_catalog>.<lakebase_operational_schema>.<table>; create-synced-table needs that UC
+# schema to already exist (create_database_objects_if_missing makes the table, not the schema).
+lb_catalog = settings.lakebase_uc_catalog or settings.uc_catalog
+lb_schema = getattr(settings, "lakebase_operational_schema", None) or "public"
+
 stmts = [
     f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{op_schema}`",
     f"CREATE VOLUME IF NOT EXISTS `{catalog}`.`{op_schema}`.`{volume}`",
     f"CREATE SCHEMA IF NOT EXISTS `{trace_catalog}`.`{trace_schema}`",
+    f"CREATE SCHEMA IF NOT EXISTS `{lb_catalog}`.`{lb_schema}`",
 ]
 
 for s in stmts:
@@ -46,5 +53,5 @@ for s in stmts:
 
 print(
     f"Bootstrap complete: {catalog}.{op_schema} (+ volume {volume}), "
-    f"trace schema {trace_catalog}.{trace_schema}."
+    f"trace schema {trace_catalog}.{trace_schema}, lakebase schema {lb_catalog}.{lb_schema}."
 )

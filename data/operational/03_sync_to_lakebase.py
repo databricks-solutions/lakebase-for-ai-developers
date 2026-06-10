@@ -19,8 +19,9 @@ LAKEBASE_AUTOSCALING_BRANCH (and the source Delta tables from step 01).
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
+import time
+from collections import namedtuple
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parents[2])
@@ -52,15 +53,69 @@ def _require(value: str | None, name: str) -> str:
     return value
 
 
-def _profile_flag() -> list[str]:
-    if not settings.on_databricks and settings.databricks_profile:
-        return ["--profile", settings.databricks_profile]
-    return []
+_CliResult = namedtuple("CliResult", ["returncode", "stdout", "stderr"])
+_WS = None
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess:
-    print("  $ databricks " + " ".join(args))
-    return subprocess.run(["databricks", *args, *_profile_flag()], capture_output=True, text=True)
+def _ws():
+    global _WS
+    if _WS is None:
+        from databricks.sdk import WorkspaceClient
+
+        _WS = WorkspaceClient()
+    return _WS
+
+
+def _run(args: list[str]) -> "_CliResult":
+    """Synced-table ops via the Databricks REST API (SDK api_client) — NOT the `databricks` CLI.
+    The CLI binary is blocked on serverless job compute ("only supported for interactive use from
+    the web terminal on x86 compute"), but the underlying /api/2.0/postgres/synced_tables endpoints
+    work over HTTP. Translates the old `["postgres", "<verb>", ...]` calls and returns a
+    CLI-compatible (returncode, stdout, stderr) tuple so the call sites are unchanged."""
+    verb = args[1] if len(args) > 1 else ""
+    print("  → api: " + " ".join(args[:3]))
+    try:
+        if verb == "get-synced-table":
+            tid = args[2].split("synced_tables/", 1)[-1]
+            resp = _ws().api_client.do("GET", f"/api/2.0/postgres/synced_tables/{tid}")
+            return _CliResult(0, json.dumps(resp), "")
+        if verb == "delete-synced-table":
+            tid = args[2].split("synced_tables/", 1)[-1]
+            _ws().api_client.do("DELETE", f"/api/2.0/postgres/synced_tables/{tid}")
+            return _CliResult(0, "", "")
+        if verb == "create-synced-table":
+            tid = args[2]  # ["postgres", "create-synced-table", <id>, "--json", <spec>]
+            spec = json.loads(args[4])
+            resp = _ws().api_client.do(
+                "POST", "/api/2.0/postgres/synced_tables",
+                query={"synced_table_id": tid}, body=spec,
+            )
+            return _CliResult(0, json.dumps(resp), "")
+        return _CliResult(1, "", f"unsupported op: {' '.join(args)}")
+    except Exception as e:  # 404 (not found), 400 (bad spec), etc. → non-zero like the CLI
+        return _CliResult(1, "", str(e))
+
+
+def _wait_online(tid: str, timeout_s: int = 360) -> bool:
+    """Poll until the synced table's initial snapshot has materialized — the REST create returns
+    immediately (unlike the CLI, which waited), and the next task queries the Postgres table, so we
+    block here until it actually exists. SNAPSHOT pipelines for the small demo tables finish fast."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        r = _run(["postgres", "get-synced-table", f"synced_tables/{tid}"])
+        if r.returncode == 0:
+            try:
+                state = json.loads(r.stdout).get("status", {}).get("detailed_state", "")
+            except (ValueError, AttributeError):
+                state = ""
+            if "ONLINE" in state:
+                return True
+            if "FAILED" in state or "OFFLINE" in state:
+                print(f"    ! {tid} reached {state}")
+                return False
+        time.sleep(10)
+    print(f"    ! {tid} not ONLINE within {timeout_s}s (continuing)")
+    return False
 
 
 def _current_mode(get_stdout: str) -> str | None:
@@ -98,6 +153,7 @@ def main() -> None:
     print(f"Source Delta      : {src_prefix}.*")
     print(f"Live sync mode   : {_LIVE_MODE}  (LAKEBASE_SYNC_MODE — set CONTINUOUS for a live demo)\n")
 
+    failures: list[str] = []
     for table, pk, policy in SYNC_SPECS:
         target = f"{lakebase_catalog}.{pg_schema}.{table}"
         full = f"synced_tables/{target}"
@@ -135,9 +191,21 @@ def main() -> None:
         print(f"  creating {policy} synced table: {target}")
         result = _run(["postgres", "create-synced-table", target, "--json", json.dumps(spec)])
         if result.returncode != 0:
-            print(f"    ! failed: {result.stderr.strip()}")
+            # The CLI reports the cause on stderr or stdout — surface both (empty stderr alone hid
+            # a "schema does not exist" error before). Record so the task fails loudly at the end.
+            detail = (result.stderr.strip() or result.stdout.strip() or "unknown error")
+            print(f"    ! failed: {detail}")
+            failures.append(f"{target}: {detail}")
         else:
-            print(f"    started (use get-synced-table to watch status)\n")
+            print(f"    started; waiting for initial snapshot to come online: {target}")
+            _wait_online(target)
+
+    if failures:
+        # A seed task that couldn't create its synced tables must FAIL, not report success.
+        print(f"\n{len(failures)} synced table(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
+        sys.exit(1)
 
     print("\nNext steps:")
     print("  • Watch status: databricks postgres get-synced-table synced_tables/<catalog>.<schema>.<table>")

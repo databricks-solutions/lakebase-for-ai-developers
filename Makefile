@@ -11,6 +11,11 @@
 TARGET ?= dev
 SEED   ?= true
 
+# Optional bundle-variable overrides (no need to edit databricks.yml per workspace), e.g.:
+#   make deploy PROFILE=<p> VARS="uc_catalog=serverless_stable_96t79b_catalog lakebase_project=my-proj"
+VARS ?=
+VAR_FLAGS := $(foreach v,$(VARS),--var $(v))
+
 ifndef PROFILE
 PROFILE := $(DATABRICKS_CONFIG_PROFILE)
 endif
@@ -25,11 +30,11 @@ build:
 	npm --prefix frontend run build
 
 validate: _require_profile
-	databricks bundle validate -t $(TARGET) --profile $(PROFILE)
+	databricks bundle validate -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 
 # Build + deploy the App/experiment, then seed demo data unless SEED=false.
 deploy: _require_profile build
-	databricks bundle deploy -t $(TARGET) --profile $(PROFILE)
+	databricks bundle deploy -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 	@if [ "$(SEED)" = "true" ]; then \
 	  echo "==> seeding demo data (SEED=true)"; \
 	  $(MAKE) seed PROFILE=$(PROFILE) TARGET=$(TARGET); \

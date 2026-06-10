@@ -47,6 +47,11 @@ You'll plug these into the bundle variables in §4:
 > almost every grant in §6 automatically. The checklist below spells out the exact privileges if
 > you're not an admin or are handing roles to a service account.
 
+> **⚠️ The workspace must have serverless compute** (the seed job runs on serverless). On
+> Field-Engineering vending-machine workspaces that means an **`aws_stable_serverless`** template —
+> the `*_classic` templates have **no** serverless and can't run the seed. Serverless is a property
+> of the workspace, not a toggle you can flip on.
+
 ---
 
 ## 3. Create the Lakebase project (one-time)
@@ -56,8 +61,8 @@ in Lakebase autoscaling Postgres. Create a project (UI: **Compute → Lakebase �
 `databricks-lakebase-autoscale` skill / CLI):
 
 ```bash
-databricks postgres create-project \
-  --project-id mfg-supply-chain-copilot \
+# PROJECT_ID is a positional argument (not a --project-id flag).
+databricks postgres create-project mfg-supply-chain-copilot \
   --json '{"spec": {"display_name": "MFG Supply-Chain Copilot", "pg_version": "17"}}' \
   --profile <p>
 ```
@@ -99,9 +104,16 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 # 0. authenticate the CLI to the target workspace
 databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile <p>
 
-# 1. one command: build the SPA, deploy the bundle, seed the demo data
-make deploy PROFILE=<p>
+# 1. one command: build the SPA, deploy the bundle, seed the demo data.
+#    Pass workspace-specific variables via VARS (no need to edit databricks.yml):
+make deploy PROFILE=<p> VARS="uc_catalog=<your-writable-catalog>"
 ```
+
+The seed job is **fully serverless and self-contained** — every data script runs through the
+`data/_seed_task.py` launcher (which fixes `sys.path` + injects config, since serverless tasks
+get no env vars and no `__file__`), the bundle creates all schemas it needs (including the Lakebase
+`public` schema), and `sync_to_lakebase` creates the synced tables via the **REST API** (the
+`databricks` CLI is blocked on serverless compute). No manual schema/table creation is required.
 
 That wrapper runs three steps (raw equivalents are in the header of `databricks.yml`):
 1. `npm --prefix frontend ci && npm --prefix frontend run build` → `frontend/dist`
