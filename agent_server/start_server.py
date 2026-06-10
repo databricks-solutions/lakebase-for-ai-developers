@@ -36,7 +36,10 @@ logger = logging.getLogger(__name__)
 
 agent_server = LongRunningAgentServer(
     "ResponsesAgent",
-    enable_chat_proxy=True,
+    # Disabled: the chat proxy serves "/" by forwarding to a Next.js app on CHAT_APP_PORT (3000)
+    # we don't run — it 503s. Our own React SPA is served at /ui by agent_server.webapp, and "/"
+    # redirects there. Re-enable only if reinstating the template's separate chat frontend.
+    enable_chat_proxy=False,
     db_instance_name=LAKEBASE_CONFIG.instance_name,
     db_autoscaling_endpoint=LAKEBASE_CONFIG.autoscaling_endpoint,
     db_project=LAKEBASE_CONFIG.autoscaling_project,
@@ -81,6 +84,13 @@ async def _lifespan(app):
 
 
 app.router.lifespan_context = _lifespan
+
+# Register the custom web UI (chat SPA + /api/me + /api/sessions + /api/explorer) onto `app`.
+# Imported last so `app` is fully defined first (webapp.py does `from ...start_server import app`).
+# NOTE: `from agent_server import webapp`, NOT `import agent_server.webapp` — the latter rebinds
+# the name `agent_server` to the package, shadowing the LongRunningAgentServer instance below and
+# breaking `agent_server.run(...)` in main().
+from agent_server import webapp  # noqa: E402,F401
 
 
 def main():

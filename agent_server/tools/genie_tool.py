@@ -9,8 +9,6 @@ to delegate the NL→SQL translation to the curated Genie space.
 
 from __future__ import annotations
 
-from functools import lru_cache
-
 from databricks.sdk import WorkspaceClient
 from langchain_core.tools import tool
 
@@ -18,11 +16,13 @@ from agent_server.config import settings
 from agent_server.contracts import GenieResult
 
 
-@lru_cache(maxsize=1)
 def _client() -> WorkspaceClient:
-    """Lazy + cached. SDK credential chain picks up the right auth mode (profile vs
-    ambient on Apps)."""
-    return WorkspaceClient()
+    """On-behalf-of-user when a forwarded token is present (UC governs Genie per user, per the
+    architecture's "OBO auth for Genie"); else the app SP / ambient auth (local dev, eval).
+    Built per call — never cache, or one user's token would be reused for everyone."""
+    from agent_server.obo import obo_workspace_client
+
+    return obo_workspace_client() or WorkspaceClient()
 
 
 def _extract_sql_and_text(msg) -> tuple[str | None, str | None]:

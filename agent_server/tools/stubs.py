@@ -13,6 +13,8 @@ from agent_server.contracts import (
     GenieResult,
     KnowledgePassage,
     KnowledgeResult,
+    MemoryItem,
+    MemoryResult,
     OperationalResult,
     OperationalRow,
 )
@@ -68,6 +70,22 @@ def ask_genie_fake(question: str, conversation_id: str | None = None) -> GenieRe
             {"supplier": "BASF Corp.", "open_qty": 19100},
         ],
         conversation_id=conversation_id or "stub-conv-1",
+    )
+
+
+def recall_memory_fake(question: str) -> MemoryResult:
+    return MemoryResult(
+        query=question,
+        memories=[
+            MemoryItem(
+                thread_id="stub-thread-acme",
+                question="How should we handle the Acme delivery delay?",
+                summary="Hold the line; expedite a 200-unit bridge order of SKU-1001 from DuPont.",
+                verdict="approved",
+                note="Revisit if Acme slips past Friday.",
+                score=0.92,
+            ),
+        ],
     )
 
 

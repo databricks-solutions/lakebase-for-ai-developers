@@ -14,6 +14,7 @@ from agent_server.contracts import (
     GenieResult,
     HITLDecision,
     KnowledgeResult,
+    MemoryResult,
     OperationalResult,
     PlannerRecommendation,
     RouterDecision,
@@ -32,6 +33,7 @@ class AgentState(TypedDict, total=False):
     knowledge_result: KnowledgeResult
     analytics_result: GenieResult
     operational_result: OperationalResult
+    memory_result: MemoryResult  # recalled prior decisions (long-term store; hydrate-and-use)
 
     # ── Planner ──────────────────────────────────────────────────────────────────────────
     recommendation: PlannerRecommendation

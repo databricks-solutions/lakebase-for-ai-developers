@@ -1,0 +1,37 @@
+/* Light-theme overrides for the vendored Shepherd base CSS — matches the V0 tokens
+   (oat/white cards, navy text, lava accent). Base CSS is injected from
+   /vendor/shepherd/shepherd.css by TourProvider; these layer on top, scoped to `.sr-tour`. */
+
+.shepherd-element.sr-tour {
+  background: #fff;
+  border: 1px solid var(--db-gray-lines);
+  border-radius: 10px;
+  box-shadow: 0 18px 38px -12px rgba(11, 18, 32, 0.28);
+  max-width: 380px;
+  font-family: var(--font-sans);
+}
+.shepherd-element.sr-tour .shepherd-arrow::before {
+  background: #fff;
+  border: 1px solid var(--db-gray-lines);
+}
+.sr-tour .shepherd-header { background: transparent; padding: 14px 16px 0; }
+.sr-tour .shepherd-title { font-size: 14px; font-weight: 600; color: var(--db-navy-800); letter-spacing: -0.01em; }
+.sr-tour .shepherd-text { padding: 8px 16px 4px; font-size: 13px; line-height: 1.55; color: var(--db-navy-800); }
+.sr-tour .shepherd-footer { padding: 10px 16px 14px; gap: 8px; }
+.sr-tour .shepherd-cancel-icon { color: var(--db-gray-text); font-size: 20px; }
+.sr-tour .shepherd-cancel-icon:hover { color: var(--db-navy-800); }
+
+.sr-tour .shepherd-button {
+  margin: 0; border-radius: 6px; padding: 7px 14px; font-size: 13px; font-weight: 500;
+  font-family: var(--font-sans); cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+}
+.sr-tour .shepherd-button.sr-tour-btn--primary { background: var(--db-lava-600); color: #fff; border: 0; }
+.sr-tour .shepherd-button.sr-tour-btn--primary:hover:not(:disabled) { background: var(--db-lava-700); }
+.sr-tour .shepherd-button.sr-tour-btn--ghost { background: #fff; color: var(--db-navy-800); border: 1px solid var(--db-gray-lines); }
+.sr-tour .shepherd-button.sr-tour-btn--ghost:hover:not(:disabled) { border-color: var(--db-navy-300); }
+.sr-tour .shepherd-button.sr-tour-btn--exit { background: #fff; color: var(--db-gray-text); border: 1px solid var(--db-gray-lines); margin-right: auto; }
+.sr-tour .shepherd-button.sr-tour-btn--exit:hover:not(:disabled) { color: var(--db-lava-700); border-color: var(--db-lava-600); }
+
+.shepherd-modal-overlay-container.shepherd-modal-is-visible { opacity: 0.45; }
+.sr-tour-active [data-tour].shepherd-enabled,
+.shepherd-target.shepherd-enabled { box-shadow: 0 0 0 3px rgba(255, 54, 33, 0.55); border-radius: 6px; }

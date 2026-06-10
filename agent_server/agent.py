@@ -67,16 +67,53 @@ def _export_local_trace_credentials() -> None:
 
 
 def _setup_mlflow_experiment() -> None:
-    """Give traces a home. On the App, MLFLOW_EXPERIMENT_ID is injected (databricks.yml);
-    locally, fall back to a stable per-user experiment so `mlflow.search_traces` can find them."""
+    """Give traces a home. On Databricks Apps the default (artifact-storage) trace export is
+    blocked by egress; MLflow 3 **Unity-Catalog tracing** routes traces into a UC schema over a
+    reachable API path. When MLFLOW_TRACE_CATALOG/SCHEMA are set we bind the experiment to that
+    UC location (+ a SQL warehouse for trace storage); otherwise fall back to plain experiment
+    tracing (local dev / eval)."""
     try:
+        trace_location = None
+        cat = settings.mlflow_trace_catalog or settings.uc_catalog
+        sch = settings.mlflow_trace_schema
+        wh = settings.mlflow_tracing_warehouse_id or settings.warehouse_id
+        if cat and sch:
+            try:
+                from mlflow.entities.trace_location import UnityCatalog
+
+                trace_location = UnityCatalog(
+                    catalog_name=cat, schema_name=sch,
+                    table_prefix=settings.mlflow_trace_table_prefix,
+                )
+                if wh:
+                    os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = wh
+            except Exception as exc:  # mlflow < 3.11, or location unsupported
+                logger.warning("UC trace location unavailable; default tracing: %s", exc)
+                trace_location = None
+
         if settings.mlflow_experiment_id:
-            mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+            # Bind to the explicitly-configured (shared project) experiment. Attaching a UC trace
+            # destination needs the experiment NAME, so resolve it from the id. NOTE: the target
+            # experiment must have NO existing traces for a UC destination to bind.
+            if trace_location is not None:
+                exp = mlflow.get_experiment(settings.mlflow_experiment_id)
+                mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
+            else:
+                mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
         elif mlflow.get_tracking_uri() == "databricks":
             from databricks.sdk import WorkspaceClient
 
             me = WorkspaceClient().current_user.me().user_name
-            mlflow.set_experiment(f"/Users/{me}/supply-chain-planner")
+            # No explicit experiment → a dedicated per-user experiment (UC dest needs trace-free).
+            name = f"/Users/{me}/supply-chain-planner-uc" if trace_location is not None else f"/Users/{me}/supply-chain-planner"
+            if trace_location is not None:
+                mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
+            else:
+                mlflow.set_experiment(name)
+        if trace_location is not None:
+            logger.info("MLflow UC tracing → %s.%s (prefix=%s) on experiment %s",
+                        cat, sch, settings.mlflow_trace_table_prefix,
+                        settings.mlflow_experiment_id or f"/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
         logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
 
@@ -154,10 +191,9 @@ def _render_recommendation(rec) -> str:
     if rec.actions:
         lines.append("Proposed actions:")
         lines += [f"  {i}. {a}" for i, a in enumerate(rec.actions, 1)]
-    if rec.est_cost_usd is not None:
-        lines.append(f"\nEstimated cost: ${rec.est_cost_usd:,.0f}")
-    lines.append(f"Needs approval: {rec.needs_approval}")
-    return "\n".join(lines)
+    # est_cost / needs_approval are surfaced by the UI as a grey footnote (from custom_outputs),
+    # not inline in the assistant text.
+    return "\n".join(lines).rstrip()
 
 
 def _custom_outputs(state: dict, interrupt_payload: Any | None) -> dict[str, Any]:
