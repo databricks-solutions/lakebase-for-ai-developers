@@ -47,6 +47,8 @@ _CHECKPOINT_CONTRACT_TYPES = (
     contracts.HITLDecision,
     contracts.HITLVerdict,
     contracts.DocType,
+    contracts.MemoryContext,
+    contracts.MemoryItem,
 )
 
 

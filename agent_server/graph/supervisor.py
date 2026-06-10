@@ -20,13 +20,14 @@ _SYSTEM_PROMPT = """\
 You are the supervisor for a supply-chain planning copilot. Given a planner's question,
 decide which subset of the gather agents to invoke. Return STRICT JSON matching the
 RouterDecision schema with fields: agents (list of any of "knowledge", "analytics",
-"operational", "memory") and reasoning (one sentence).
+"operational") and reasoning (one sentence).
+
+The planner's OWN prior decisions are ALWAYS recalled from long-term memory automatically
+(after the gather phase) — you do not route to it. For questions that refer to earlier
+conversations ("what did we decide…", "continue this morning's escalation", "yesterday"),
+still pick the gather agents relevant to the underlying topic.
 
 Agent purposes:
-- memory: recall the planner's OWN prior decisions/conversations from long-term memory. Name
-  it for questions that refer to earlier conversations ("what did we decide…", "continue this
-  morning's escalation", "last time", "yesterday", "remind me"). (Memory is always consulted in
-  the background, but naming it focuses the answer on recall.)
 - knowledge: semantic search over PDFs (contracts, supplier notifications, competitor
   catalogs, promotion briefs, market events). Use for questions about specific documents,
   contract terms, supplier announcements, market events.
@@ -69,8 +70,8 @@ def _keyword_route(question: str) -> RouterDecision:
         agents.append("analytics")
     if any(t in q for t in ("similar", "past quality", "quality issue", "incident", "comparable case", "prior")):
         agents.append("operational")
-    if any(t in q for t in ("decide", "decided", "yesterday", "last time", "earlier", "this morning", "continue", "remind", "we agreed", "prior conversation")):
-        agents.append("memory")
+    # Long-term memory is hydrated automatically after gather (not a routable agent), so
+    # continuation cues ("what did we decide…") only steer the topical gather agents above.
     if not agents:
         # Default — without LLM and without keyword hits, hit both retrieval surfaces.
         agents = ["knowledge", "analytics"]

@@ -8,13 +8,17 @@ state grows too large, move them to side tables and keep refs only.
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from agent_server.contracts import (
     GenieResult,
     HITLDecision,
     KnowledgeResult,
-    MemoryResult,
+    MemoryContext,
     OperationalResult,
     PlannerRecommendation,
     RouterDecision,
@@ -26,6 +30,12 @@ class AgentState(TypedDict, total=False):
     question: str  # the user's message
     user_id: str  # OBO; threaded through to operational + audit
 
+    # ── Short-term memory (WS1): conversational history accumulated per thread via the ───
+    # checkpointer. The entrypoints append a HumanMessage per turn; the planner appends an
+    # AIMessage(summary) and reads a trimmed `_history_block` so follow-ups resolve referents
+    # ("that SKU"). add_messages is the append reducer.
+    messages: Annotated[list[AnyMessage], add_messages]
+
     # ── Routing (supervisor sets this) ───────────────────────────────────────────────────
     route_decision: RouterDecision
 
@@ -33,7 +43,9 @@ class AgentState(TypedDict, total=False):
     knowledge_result: KnowledgeResult
     analytics_result: GenieResult
     operational_result: OperationalResult
-    memory_result: MemoryResult  # recalled prior decisions (long-term store; hydrate-and-use)
+
+    # ── Long-term memory (hydrated after gather fan-in, before the planner; no reducer) ──
+    memory_context: MemoryContext
 
     # ── Planner ──────────────────────────────────────────────────────────────────────────
     recommendation: PlannerRecommendation

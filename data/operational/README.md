@@ -93,6 +93,84 @@ the engine on **every** query path (including the similarity search), can't be b
 auditable. (Genie's analytics tables are governed by Unity Catalog out of the box via OBO — no extra
 work there.)
 
+## Agent memory: dev vs prod (isolate by Lakebase BRANCH)
+
+The LangGraph **checkpointer + store** live in their own schema (`LAKEBASE_AGENT_MEMORY_SCHEMA`),
+distinct from the operational `public` schema above.
+
+**Why branches, not separate schemas or projects.** dev + demo are the **same workspace**, so the
+idiomatic Lakebase isolation is **copy-on-write branches within the one project** (the internal
+Enterprise Lakebase Design Guide's "Simple Dev/Prod" topology: a `production` branch + a
+`development` branch). Branches isolate **data, role state, and GRANTs** and get their own endpoint
+— schemas alone isolate none of that. Separate *projects* are reserved for **cross-workspace /
+multi-tenant / regulatory** isolation (branches-across-workspaces is an explicit anti-pattern). We
+therefore use the **same schema name in every environment** — the branch is the boundary.
+
+| Environment | Branch | Schema | Connects via |
+|---|---|---|---|
+| Local dev | `development` (clone of `production`) | `supply_chain_planner_memory` | `.env` (`LAKEBASE_AUTOSCALING_BRANCH=development`) |
+| Deployed App (demo) | `production` | `supply_chain_planner_memory` | `databricks.yml` (`var.lakebase_branch[_name]`, demo target) |
+
+Create the dev branch once (copy-on-write; instant; pay only for changed pages):
+
+```bash
+databricks postgres create-branch projects/mfg-supply-chain-copilot development \
+  --json '{"spec":{"source_branch":"projects/mfg-supply-chain-copilot/branches/production","no_expiry":true}}' \
+  --profile mfg-sc-agent
+```
+
+**Caveat — synced tables don't follow a branch.** A child branch **clones the synced-table data**
+(a frozen snapshot via copy-on-write) but the **sync pipeline keeps targeting the original branch**,
+and "synced tables + branch reset" is **not GA-hardened**. For this repo that's a non-issue: the
+operational data is **static/seeded**, so the dev branch's snapshot never drifts. If you ever need
+live operational updates on a branch, create a separate synced table targeting that branch. Keep the
+production synced tables pinned to `production`.
+
+**Ownership + deploy-first (per branch).** Whoever runs `store.setup()` / `checkpointer.setup()`
+FIRST owns the memory schema **on that branch**, and a principal with only `CAN_CONNECT_AND_CREATE`
+(the App SP) **cannot write into a schema owned by someone else** — and Postgres ownership **can't
+be reassigned**. So **deploy the App before its first run on a branch** so the SP owns the schema
+there; run locally afterward with your own OAuth identity. (Running locally first is exactly how a
+split `…_memory` (you) + `…_memory_app` (SP) arose on `production`.) Note: the **app→DB binding grant
+needs a workspace admin** — `CAN_MANAGE` on the instance is not enough (this bit the mfg + credit
+DAIS booth apps with *"User does not have permission to grant permissions for added resource:
+database"*).
+
+**Inspect another principal's memory schema** (read-only, no ownership transfer) — run as a schema
+owner / `databricks_superuser`:
+
+```bash
+uv run python scripts/grant_lakebase_permissions.py <your-email> \
+    --schema supply_chain_planner_memory --mode read
+```
+
+**One-time cleanup if `production`'s memory schema is mis-owned** (your user owns it, so the App SP
+can't write and falls back to `…_memory_app`): this is a **destructive prod action — get explicit
+go-ahead and export first**. Either (A) `DROP SCHEMA supply_chain_planner_memory CASCADE` on
+`production`, redeploy so the SP recreates+owns it, migrate any rows from the orphan `…_memory_app`,
+then drop the orphan; or (B) grant the SP full access to the existing schema:
+`scripts/grant_lakebase_permissions.py <sp-client-id> --schema supply_chain_planner_memory --mode langgraph`
+(SP client id: `databricks apps get <app> -o json | jq -r .service_principal_client_id`).
+
+### P2 stretch — per-session ephemeral branch (sanctioned "stateful agent + branching" demo)
+
+The canonical Lakebase agent demo (Jenny Sun's WIP) forks a **per-session branch** at run start so a
+prompt-injected `DROP TABLE` can only nuke the throwaway branch, then merges the "good" memories back
+to the parent at commit (branch merge, or an async distillation supervisor). This maps cleanly onto
+our HITL → `commit_node` flow and is a strong future enhancement — **not built this phase.**
+
+### What the agent writes/reads (so memory stays high-signal)
+
+- **Write policy is curated by type + verdict** (`agent_server/memory.py:build_memory_writes`):
+  - `("approvals", <user>)` — every committed decision (audit), both verdicts.
+  - `("preferences", <user>)` and `("supplier_notes", <supplier>)` — only on **approved,
+    action-bearing** outcomes.
+  - Each value carries a curated `memory_text`; we embed **only that field** (`index=["memory_text"]`)
+    so semantic recall matches meaning, not JSON boilerplate.
+- **Read** happens in the `hydrate_memory` graph node (after gather, before the planner): scoped
+  semantic recall (`MEMORY_RECALL_LIMIT`, `MEMORY_SIMILARITY_THRESHOLD`) injected into the planner
+  prompt and recorded in `trace_notes`.
+
 ## Run order
 
 ```bash
