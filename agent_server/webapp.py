@@ -412,38 +412,53 @@ async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] 
 @router.get("/_seed_demo_memories")
 async def seed_demo_memories(request: Request) -> dict[str, Any]:
     """DEMO-ONLY: write a couple of the caller's "prior decisions" into the long-term store
-    (the same namespace + shape commit_node writes) so the cross-conversation recall questions
-    — "what did we decide about the Acme delay yesterday?", "continue this morning's escalation"
-    — have something to recall. Visit once in the browser. Idempotent (overwrites by key)."""
-    from agent_server.graph.planner import approvals_namespace
+    (the same curated shape `commit_node` writes — a `memory_text` field embedded via
+    `EMBED_INDEX`) so the cross-conversation recall questions — "what did we decide about the
+    Acme delay yesterday?", "continue this morning's escalation" — have something to recall.
+    Visit once in the browser. Idempotent (overwrites by key)."""
+    from agent_server.memory import EMBED_INDEX, MEMORY_TEXT_FIELD, approvals_ns, preferences_ns
 
     caller = caller_identity(request)
-    ns = approvals_namespace(caller.email)
-    demos = {
-        "demo-acme-delay": {
+    appr_ns = approvals_ns(caller.email)
+    pref_ns = preferences_ns(caller.email)
+    # Each value MUST carry `memory_text` — the hydrate node's recall skips items without it and
+    # embeds only that field (mirrors `agent_server.memory.build_memory_writes`).
+    demos: list[tuple[tuple[str, str], str, dict]] = [
+        (appr_ns, "demo-acme-delay", {
             "question": "How should we handle the Acme delivery delay?",
-            "recommendation": {"summary": "Hold firm; expedite a 200-unit bridge order of "
-                                          "SKU-1001 from DuPont to cover the Acme slip."},
             "verdict": "approved",
             "note": "Decided yesterday — revisit if Acme slips past Friday.",
-        },
-        "demo-morning-escalation": {
+            MEMORY_TEXT_FIELD: "How should we handle the Acme delivery delay? → approved: Hold "
+                               "firm; expedite a 200-unit bridge order of SKU-1001 from DuPont to "
+                               "cover the Acme slip.",
+        }),
+        (appr_ns, "demo-morning-escalation", {
             "question": "Escalate the Henkel SKU-1001 coverage gap this morning?",
-            "recommendation": {"summary": "Escalated SKU-1001 quality containment — prioritize the "
-                                          "Henkel cracking cluster; 40 on-hand vs a 500-unit open PO."},
             "verdict": "approved",
             "note": "This morning's escalation — pending supplier confirmation.",
-        },
-    }
+            MEMORY_TEXT_FIELD: "Escalate the Henkel SKU-1001 coverage gap this morning? → "
+                               "approved: Escalated SKU-1001 quality containment — prioritize the "
+                               "Henkel cracking cluster; 40 on-hand vs a 500-unit open PO.",
+        }),
+        (pref_ns, "demo-pref-bridge-order", {
+            "question": "How should we handle the Acme delivery delay?",
+            "source_thread": "demo-acme-delay",
+            MEMORY_TEXT_FIELD: "Approved approach: Hold firm and expedite a bridge order from an "
+                               "alternate supplier (DuPont) to cover a supplier slip | actions: "
+                               "Expedite a 200-unit reorder of SKU-1001; hold the existing PO.",
+        }),
+    ]
     store = _store()
     written: list[str] = []
-    for key, value in demos.items():
+    for ns, key, value in demos:
         try:
-            await _with_db_retry(lambda k=key, v=value: store.aput(ns, k, v))
-            written.append(key)
+            await _with_db_retry(
+                lambda n=ns, k=key, v=value: store.aput(n, k, v, index=EMBED_INDEX)
+            )
+            written.append(f"{ns[0]}/{key}")
         except Exception as exc:  # noqa: BLE001
             logger.warning("seed memory %s failed: %s", key, exc)
-    return {"namespace": list(ns), "written": written}
+    return {"written": written}
 
 
 # ── Streaming chat (SSE) ──────────────────────────────────────────────────────────────────
@@ -456,7 +471,7 @@ _STEP_LABELS = {
     "gather_knowledge": "Searching the knowledge corpus…",
     "gather_analytics": "Querying Genie…",
     "gather_operational": "Running the operational query…",
-    "gather_memory": "Recalling prior decisions…",
+    "hydrate_memory": "Recalling prior decisions…",
     "planner": "Composing the recommendation…",
     "hitl_review": "Preparing the approval…",
     "commit": "Finalizing…",

@@ -67,8 +67,11 @@ class Settings(BaseModel):
     # --- LLM endpoints — single inference model for v1 (one model, three callsites).
     # CLAUDE.md anticipates per-tier sizing (fast/mid/strong) for cost; promoting to that
     # is a one-line .env change. For now everything points at the same Opus endpoint.
+    # Router is a constrained CLASSIFIER (pick 0-3 gather agents + one-line reason), not a
+    # reasoning task — a fast small model is plenty and cuts ~3-12s off every run vs Opus. Keep
+    # Opus for the planner (complex synthesis). (Validated: routing/gate scorers unchanged.)
     llm_router_endpoint: str = Field(
-        default="databricks-claude-opus-4-8", alias="LLM_ROUTER_ENDPOINT"
+        default="databricks-claude-haiku-4-5", alias="LLM_ROUTER_ENDPOINT"
     )
     llm_retrieval_endpoint: str = Field(
         default="databricks-claude-opus-4-8", alias="LLM_RETRIEVAL_ENDPOINT"
@@ -92,6 +95,21 @@ class Settings(BaseModel):
     lakebase_memory_schema: str = Field(
         default="supply_chain_planner_memory", alias="LAKEBASE_AGENT_MEMORY_SCHEMA"
     )
+    # Long-term memory recall tuning (hydrate node). `limit` caps items per memory type. Recall is
+    # already scoped (preferences/approvals by user, supplier_notes by surfaced supplier), so the
+    # primary precision lever is `limit`, not a hard score cutoff. `threshold` is an OPTIONAL soft
+    # floor — default 0.0 (off) because the curated `memory_text` describes the past *decision*
+    # while the recall query is the new *question*, so genuinely-relevant matches score modestly
+    # (~0.3–0.4 observed with gte-large), and a high cutoff silently drops them. Raise it only if a
+    # large cross-user supplier-notes corpus starts injecting noise.
+    memory_recall_limit: int = Field(default=3, alias="MEMORY_RECALL_LIMIT")
+    memory_similarity_threshold: float = Field(
+        default=0.0, alias="MEMORY_SIMILARITY_THRESHOLD"
+    )
+    # Short-term memory (WS1): how many prior conversation turns (messages) to feed the planner
+    # as context. Trim-only for now — the full history is checkpointed per thread, but only the
+    # last N are rendered into the planner prompt (older turns are dropped, not summarized yet).
+    short_term_keep_recent: int = Field(default=6, alias="SHORT_TERM_KEEP_RECENT")
     # Autoscaling ("projects") connection form — set instead of instance-name for autoscaling.
     # _lakebase.connect() (02/04) accepts EITHER a full resource path here
     # (projects/<p>/branches/<b>/endpoints/<id>) OR a bare endpoint id that it combines with the

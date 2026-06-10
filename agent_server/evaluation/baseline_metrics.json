@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "layer": "graph",
+    "mode": "full",
+    "n": 6,
+    "gather_data": "stub",
+    "base_url": null,
+    "experiment_id": null,
+    "git_sha": "90ffaa6",
+    "timestamp": "2026-06-10T20:19:19+00:00"
+  },
+  "metrics": {
+    "scores": {
+      "routing_correctness": 1.0,
+      "recommendation_grounded": 0.8333,
+      "escalation_correctness": 1.0,
+      "gate_correctness": 1.0,
+      "span_structure": 1.0,
+      "per_span_latency": 0.8333,
+      "token_budget": 1.0
+    },
+    "latency_ms": {
+      "p50_total": 16118.0,
+      "p95_total": 62300.25,
+      "per_node_p95": {
+        "ChatDatabricks": 57062.7025,
+        "LangGraph": 62294.916999999994,
+        "PydanticToolsParser": 0.5965,
+        "RunnableSequence": 57068.1015,
+        "commit": 0.9248999999999999,
+        "gate_router": 0.65125,
+        "gather_analytics": 3.305949999999999,
+        "gather_knowledge": 1.2926,
+        "gather_operational": 3.0579,
+        "hitl_review": 3.6218,
+        "hydrate_memory": 0.81825,
+        "planner": 57072.084749999995,
+        "route_to_gatherers": 0.8905,
+        "run_agent": 62300.4065,
+        "supervisor": 9989.313
+      }
+    },
+    "tokens": {
+      "total": 19522,
+      "avg": 3253.7
+    },
+    "n": 6
+  }
+}
