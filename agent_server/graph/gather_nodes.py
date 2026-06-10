@@ -28,6 +28,23 @@ from agent_server.tools.stubs import (
 logger = logging.getLogger(__name__)
 
 
+def _stream_writer():
+    """Return the LangGraph custom-stream writer, or None when not in a streaming context.
+
+    get_stream_writer() RAISES outside a runnable context (not returns None), so guard with
+    try/except — this keeps the invoke path and unit tests safe."""
+    try:
+        from langgraph.config import get_stream_writer
+        return get_stream_writer()
+    except Exception:
+        return None
+
+
+def _substep(node: str, label: str) -> None:
+    if w := _stream_writer():
+        w({"kind": "substep", "node": node, "label": label})
+
+
 def _use_stubs() -> bool:
     return os.environ.get("USE_STUBS", "0") == "1"
 
@@ -36,13 +53,19 @@ def _use_stubs() -> bool:
 
 def knowledge_node(state: AgentState) -> dict:
     question = state["question"]
+    _substep("gather_knowledge", "Searching corpus…")
     if _use_stubs():
-        return {"knowledge_result": query_knowledge_fake(question)}
+        result = query_knowledge_fake(question)
+        _substep("gather_knowledge", f"{len(result.passages)} passages")
+        return {"knowledge_result": result}
     try:
         from agent_server.tools.knowledge_tool import query_knowledge_impl
-        return {"knowledge_result": query_knowledge_impl(question)}
+        result = query_knowledge_impl(question)
+        _substep("gather_knowledge", f"{len(result.passages)} passages")
+        return {"knowledge_result": result}
     except Exception as exc:  # one tool down must not 500 the whole run
         logger.warning("knowledge gather failed (degrading to empty): %s", exc)
+        _substep("gather_knowledge", "0 passages")
         return {"knowledge_result": KnowledgeResult(query=question, passages=[])}
 
 
@@ -50,13 +73,19 @@ def knowledge_node(state: AgentState) -> dict:
 
 def analytics_node(state: AgentState) -> dict:
     question = state["question"]
+    _substep("gather_analytics", "Genie: submitting query…")
     if _use_stubs():
-        return {"analytics_result": ask_genie_fake(question)}
+        result = ask_genie_fake(question)
+        _substep("gather_analytics", f"Genie: {len(result.rows)} rows, SQL ready")
+        return {"analytics_result": result}
     try:
         from agent_server.tools.genie_tool import ask_genie_impl
-        return {"analytics_result": ask_genie_impl(question)}
+        result = ask_genie_impl(question)
+        _substep("gather_analytics", f"Genie: {len(result.rows)} rows, SQL ready")
+        return {"analytics_result": result}
     except Exception as exc:  # degrade, don't fail the run
         logger.warning("analytics gather failed (degrading to empty): %s", exc)
+        _substep("gather_analytics", "Genie: 0 rows, SQL ready")
         return {"analytics_result": GenieResult(question=question, error=str(exc))}
 
 
@@ -65,13 +94,19 @@ def analytics_node(state: AgentState) -> dict:
 def operational_node(state: AgentState) -> dict:
     question = state["question"]
     user_id = state.get("user_id", "unknown")
+    _substep("gather_operational", "Running operational query…")
     if _use_stubs():
-        return {"operational_result": query_operational_fake(question, user_id)}
+        result = query_operational_fake(question, user_id)
+        _substep("gather_operational", f"{len(result.rows)} matches")
+        return {"operational_result": result}
     try:
         from agent_server.tools.operational_tool import query_operational_impl
-        return {"operational_result": query_operational_impl(question, user_id)}
+        result = query_operational_impl(question, user_id)
+        _substep("gather_operational", f"{len(result.rows)} matches")
+        return {"operational_result": result}
     except Exception as exc:  # degrade, don't fail the run
         logger.warning("operational gather failed (degrading to empty): %s", exc)
+        _substep("gather_operational", "0 matches")
         return {"operational_result": OperationalResult(question=question, sql="", rows=[])}
 
 

@@ -257,11 +257,15 @@ async def stream_handler(
             config["configurable"]["store"] = store
             graph = build_graph(checkpointer=checkpointer)
 
-            # Drive the graph to completion (or to the HITL interrupt). stream_mode="updates"
-            # lets us detect the interrupt; autolog records the full run as one trace either way.
+            # Drive the graph to completion (or to the HITL interrupt). stream_mode includes
+            # "updates" (interrupt detection) and "custom" (intra-node progress); for MVP the
+            # custom chunks are ignored here — the single final event is unchanged. Autolog
+            # records the full run as one trace either way.
             interrupt_payload: Any | None = None
-            async for chunk in graph.astream(graph_input, config, stream_mode="updates"):
-                if "__interrupt__" in chunk:
+            async for mode, chunk in graph.astream(
+                graph_input, config, stream_mode=["updates", "custom"]
+            ):
+                if mode == "updates" and "__interrupt__" in chunk:
                     intr = chunk["__interrupt__"]
                     interrupt_payload = intr[0].value if intr else None
 

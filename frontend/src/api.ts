@@ -47,6 +47,9 @@ function extractText(output: any[]): string {
  */
 interface StreamHandlers {
   onStep?: (label: string) => void;
+  onSubstep?: (node: string, label: string) => void;
+  onTrace?: (note: string) => void;
+  onRoute?: (agents: string[], reasoning: string) => void;
   onDone: (text: string, extras: AgentExtras) => void;
   onError: (msg: string) => void;
 }
@@ -84,6 +87,9 @@ async function consumeSSE(payload: Record<string, unknown>, handlers: StreamHand
       if (obj.type === "step" && obj.label) handlers.onStep?.(obj.label);
       else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", { ...(obj.extras ?? {}), trace_id: obj.trace_id } as AgentExtras);
       else if (obj.type === "error") handlers.onError(obj.error || "stream error");
+      else if (obj.type === "substep" && obj.label) handlers.onSubstep?.(obj.node ?? "", obj.label);
+      else if (obj.type === "trace" && obj.note) handlers.onTrace?.(obj.note);
+      else if (obj.type === "route" && Array.isArray(obj.agents)) handlers.onRoute?.(obj.agents, obj.reasoning ?? "");
     }
   }
 }

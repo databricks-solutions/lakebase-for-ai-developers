@@ -517,17 +517,29 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
                 graph = build_graph(checkpointer=checkpointer)
                 interrupt_payload = None
                 seen: set[str] = set()
-                async for chunk in graph.astream(
-                    graph_input, config, stream_mode="updates"
+                async for mode, chunk in graph.astream(
+                    graph_input, config, stream_mode=["updates", "custom"]
                 ):
-                    if "__interrupt__" in chunk:
-                        intr = chunk["__interrupt__"]
-                        interrupt_payload = intr[0].value if intr else None
-                        continue
-                    for node in chunk.keys():
-                        if node in _STEP_LABELS and node not in seen:
-                            seen.add(node)
-                            yield _sse({"type": "step", "node": node, "label": _STEP_LABELS[node]})
+                    if mode == "updates":
+                        if "__interrupt__" in chunk:
+                            intr = chunk["__interrupt__"]
+                            interrupt_payload = intr[0].value if intr else None
+                            continue
+                        for node in chunk.keys():
+                            if node in _STEP_LABELS and node not in seen:
+                                seen.add(node)
+                                yield _sse({"type": "step", "node": node, "label": _STEP_LABELS[node]})
+                    elif mode == "custom":
+                        kind = chunk.get("kind")
+                        if kind == "route":
+                            yield _sse({"type": "route", "agents": chunk.get("agents"),
+                                        "reasoning": chunk.get("reasoning")})
+                        elif kind == "substep":
+                            yield _sse({"type": "substep", "node": chunk.get("node"),
+                                        "label": chunk.get("label")})
+                        elif kind == "trace":
+                            yield _sse({"type": "trace", "note": chunk.get("note")})
+                        # unknown kind → ignore
                 snapshot = await graph.aget_state(config)
                 state = dict(snapshot.values) if snapshot else {}
                 trace_id = None

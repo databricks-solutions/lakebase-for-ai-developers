@@ -31,6 +31,19 @@ from agent_server.memory import build_memory_writes, write_memories
 
 logger = logging.getLogger(__name__)
 
+
+def _stream_writer():
+    """Return the LangGraph custom-stream writer, or None when not in a streaming context.
+
+    get_stream_writer() RAISES outside a runnable context (not returns None), so guard with
+    try/except — this keeps the invoke path and unit tests safe."""
+    try:
+        from langgraph.config import get_stream_writer
+        return get_stream_writer()
+    except Exception:
+        return None
+
+
 # Above this estimated cost the gate trips and routes to HITL approval.
 APPROVAL_COST_THRESHOLD_USD = 50_000.0
 
@@ -201,6 +214,8 @@ def planner_node(state: AgentState) -> dict:
     evidence = _evidence_block(state)
     memory = _memory_block(state)
     history = _history_block(state)
+    if w := _stream_writer():
+        w({"kind": "substep", "node": "planner", "label": "Composing recommendation…"})
     draft = _llm_draft(question, evidence, memory, history) or _fallback_draft(state, question)
 
     # Deterministic gate: a recommendation needs human approval when it COMMITS SPEND / is
@@ -223,13 +238,15 @@ def planner_node(state: AgentState) -> dict:
     )
 
     cost = f"${rec.est_cost_usd:,.0f}" if rec.est_cost_usd is not None else "unknown"
-    notes = state.get("trace_notes", []) or []
-    notes = [
-        *notes,
+    note = (
         f"planner → needs_approval={rec.needs_approval} "
         f"(action_bearing={rec.is_action_bearing}, est {cost}, memory={'used' if memory else 'none'}, "
-        f"history={'used' if history else 'none'})",
-    ]
+        f"history={'used' if history else 'none'})"
+    )
+    notes = state.get("trace_notes", []) or []
+    notes = [*notes, note]
+    if w := _stream_writer():
+        w({"kind": "trace", "note": note})
     # Record the assistant turn (the recommendation one-liner) into short-term history so the
     # NEXT turn on this thread can resolve follow-up referents. add_messages appends it.
     return {"recommendation": rec, "trace_notes": notes,
@@ -258,8 +275,11 @@ def hitl_review_node(state: AgentState) -> dict:
 
     # `resume_value` is whatever the app passed to Command(resume=...): an HITLDecision dict.
     decision = _coerce_decision(resume_value, state.get("user_id", "unknown"))
+    note = f"hitl_review → {decision.verdict.value} by {decision.user_id}"
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, f"hitl_review → {decision.verdict.value} by {decision.user_id}"]
+    notes = [*notes, note]
+    if w := _stream_writer():
+        w({"kind": "trace", "note": note})
     return {"hitl_decision": decision, "trace_notes": notes}
 
 
@@ -294,6 +314,9 @@ async def commit_node(state: AgentState, config: RunnableConfig) -> dict:
 
     verdict = decision.verdict.value if decision else "n/a"
     written = ", ".join(f"{k}={v}" for k, v in counts.items()) if counts else "skipped"
+    note = f"commit → finalized (verdict={verdict}, memory_writes={written})"
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, f"commit → finalized (verdict={verdict}, memory_writes={written})"]
+    notes = [*notes, note]
+    if w := _stream_writer():
+        w({"kind": "trace", "note": note})
     return {"trace_notes": notes}

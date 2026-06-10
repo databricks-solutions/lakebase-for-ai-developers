@@ -64,17 +64,15 @@ class Settings(BaseModel):
     # (so the OBO demo works for whoever runs it); set to a fixed email for a shared demo.
     demo_planner_user: str | None = Field(default=None, alias="DEMO_PLANNER_USER")
 
-    # --- LLM endpoints — single inference model for v1 (one model, three callsites).
+    # --- LLM endpoints — two LLM callsites (router + planner).
     # CLAUDE.md anticipates per-tier sizing (fast/mid/strong) for cost; promoting to that
-    # is a one-line .env change. For now everything points at the same Opus endpoint.
+    # is a one-line .env change. The gather/retrieval agents use Vector Search / Genie /
+    # Lakebase (not a ChatDatabricks LLM endpoint), so no retrieval endpoint is needed here.
     # Router is a constrained CLASSIFIER (pick 0-3 gather agents + one-line reason), not a
     # reasoning task — a fast small model is plenty and cuts ~3-12s off every run vs Opus. Keep
     # Opus for the planner (complex synthesis). (Validated: routing/gate scorers unchanged.)
     llm_router_endpoint: str = Field(
         default="databricks-claude-haiku-4-5", alias="LLM_ROUTER_ENDPOINT"
-    )
-    llm_retrieval_endpoint: str = Field(
-        default="databricks-claude-opus-4-8", alias="LLM_RETRIEVAL_ENDPOINT"
     )
     llm_planner_endpoint: str = Field(
         default="databricks-claude-opus-4-8", alias="LLM_PLANNER_ENDPOINT"

@@ -65,10 +65,8 @@ env:
   - name: VECTOR_SEARCH_INDEX
     value: "serverless_stable_yau46e_catalog.planner.knowledge_chunks_index"
 
-  # Single inference model for v1.
+  # Two LLM callsites (router + planner); single inference model for v1.
   - name: LLM_ROUTER_ENDPOINT
-    value: "databricks-claude-opus-4-8"
-  - name: LLM_RETRIEVAL_ENDPOINT
     value: "databricks-claude-opus-4-8"
   - name: LLM_PLANNER_ENDPOINT
     value: "databricks-claude-opus-4-8"

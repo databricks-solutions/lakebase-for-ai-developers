@@ -40,6 +40,14 @@ export default function App() {
       setBusy(true);
       await streamMessage(text, thread, {
         onStep: (label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
+        onRoute: (agents, _reasoning) => patch((x) => {
+          const line = `Routing → ${agents.join(", ")}`;
+          const steps = x.steps ?? [];
+          if (steps.includes(line)) return { ...x, route: agents };
+          return { ...x, route: agents, steps: [line, ...steps] };
+        }),
+        onSubstep: (_node, label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
+        onTrace: (note) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), note] })),
         onDone: (reply, extras) => {
           patch((x) => ({ ...x, text: reply, extras, pending: false }));
           upsertSession(thread, {
@@ -68,6 +76,14 @@ export default function App() {
       setBusy(true);
       await resumeMessage(thread, verdict, {
         onStep: (label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
+        onRoute: (agents, _reasoning) => patch((x) => {
+          const line = `Routing → ${agents.join(", ")}`;
+          const steps = x.steps ?? [];
+          if (steps.includes(line)) return { ...x, route: agents };
+          return { ...x, route: agents, steps: [line, ...steps] };
+        }),
+        onSubstep: (_node, label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
+        onTrace: (note) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), note] })),
         onDone: (reply, extras) => { patch((x) => ({ ...x, text: reply, extras, pending: false })); refreshSessions(); },
         onError: (msg) => patch((x) => ({ ...x, text: `Error: ${msg}`, pending: false, error: true })),
       });
