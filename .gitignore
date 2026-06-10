@@ -226,3 +226,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Eval flywheel per-run outputs (regenerated each run; baseline_metrics.json IS committed)
+eval_report.md
+eval_results.json
+memory_report.md
+memory_results.json

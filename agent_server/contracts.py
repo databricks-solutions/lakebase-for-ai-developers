@@ -93,30 +93,36 @@ class OperationalResult(BaseModel):
     rows: list[OperationalRow]
 
 
-# ── Memory agent (long-term recall over the Lakebase LangGraph store) ─────────────────────
+# ── Long-term memory (hydrated after gather fan-in, injected into the planner context) ────
+# Curated semantic recall over the Lakebase LangGraph store. Write policy + namespaces live in
+# `agent_server.memory`; the hydrate node (`graph/memory_nodes.py`) populates `MemoryContext`.
 
 class MemoryItem(BaseModel):
-    """One recalled prior decision/conversation from the long-term store — what `commit_node`
-    persisted under the user's `("approvals", user_id)` namespace."""
+    """One recalled long-term memory snippet (the curated `memory_text` + recall metadata)."""
 
-    thread_id: str | None = None
-    question: str | None = None
-    summary: str | None = None  # the prior recommendation's one-liner
-    verdict: str | None = None  # approved / rejected / edited
-    note: str | None = None
-    score: float | None = None  # semantic relevance to the current question
+    text: str  # the curated memory_text that was embedded + recalled
+    score: float | None = None  # semantic similarity from the store search (higher = closer)
+    namespace: str | None = None  # e.g. "approvals" / "preferences" / "supplier_notes"
+    key: str | None = None
 
 
-class MemoryResult(BaseModel):
-    query: str
-    memories: list[MemoryItem] = Field(default_factory=list)
+class MemoryContext(BaseModel):
+    """Long-term memory hydrated before the planner runs. Distinct state key (no reducer)."""
+
+    preferences: list[MemoryItem] = Field(default_factory=list)
+    prior_approvals: list[MemoryItem] = Field(default_factory=list)
+    supplier_notes: list[MemoryItem] = Field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.preferences or self.prior_approvals or self.supplier_notes)
 
 
 # ── Router / supervisor ──────────────────────────────────────────────────────────────────
 
-# "memory" recalls the user's own prior decisions/conversations (long-term store). It always
-# runs (hydrate-and-use); the router may also name it to prioritize a pure-recall question.
-AgentName = Literal["knowledge", "analytics", "operational", "memory"]
+# Long-term memory is NOT a routable gather agent — it's hydrated after the gather fan-in
+# (see `graph/memory_nodes.py`), so the supervisor only chooses among the live gather agents.
+AgentName = Literal["knowledge", "analytics", "operational"]
 
 
 class RouterDecision(BaseModel):

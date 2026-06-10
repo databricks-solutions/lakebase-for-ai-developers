@@ -22,6 +22,7 @@ from typing import Any, AsyncGenerator, Optional
 
 import mlflow
 from fastapi import HTTPException
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from mlflow.genai.agent_server import invoke, stream
 from mlflow.types.responses import (
@@ -242,9 +243,13 @@ async def stream_handler(
         config["configurable"]["user_id"] = user_id
 
     resume = _resume_command(request, user_id or "unknown")
+    question = _latest_user_text(request)
     graph_input: Any = resume if resume is not None else {
-        "question": _latest_user_text(request),
+        "question": question,
         "user_id": user_id or "unknown",
+        # WS1 short-term memory: record the user turn so the planner's history block (and the
+        # next turn on this thread) sees it. Not added on resume — that continues an existing turn.
+        "messages": [HumanMessage(content=question)],
     }
 
     try:
@@ -293,9 +298,13 @@ async def invoke_handler(request: ResponsesAgentRequest) -> ResponsesAgentRespon
         config["configurable"]["user_id"] = user_id
 
     resume = _resume_command(request, user_id or "unknown")
+    question = _latest_user_text(request)
     graph_input: Any = resume if resume is not None else {
-        "question": _latest_user_text(request),
+        "question": question,
         "user_id": user_id or "unknown",
+        # WS1 short-term memory: record the user turn so the planner's history block (and the
+        # next turn on this thread) sees it. Not added on resume — that continues an existing turn.
+        "messages": [HumanMessage(content=question)],
     }
 
     try:

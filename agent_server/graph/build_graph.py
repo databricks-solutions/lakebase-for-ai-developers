@@ -2,8 +2,8 @@
 
 Topology (mirrors `docs/architecture.md`):
 
-    START → supervisor → (fan-out via conditional edge) → [gather_*] → planner
-          → gate → (hitl_review if needs_approval, else commit) → END
+    START → supervisor → (fan-out via conditional edge) → [gather_*] → hydrate_memory
+          → planner → gate → (hitl_review if needs_approval, else commit) → END
 
 Gather nodes write distinct state keys (no reducer). The fan-out uses
 `add_conditional_edges` returning a *list* of target node names — LangGraph runs them
@@ -21,10 +21,10 @@ from langgraph.graph import END, START, StateGraph
 from agent_server.graph.gather_nodes import (
     analytics_node,
     knowledge_node,
-    memory_node,
     operational_node,
     route_to_gatherers,
 )
+from agent_server.graph.memory_nodes import hydrate_memory_node
 from agent_server.graph.planner import (
     commit_node,
     gate_router,
@@ -35,7 +35,7 @@ from agent_server.graph.state import AgentState
 from agent_server.graph.supervisor import supervisor_node
 
 
-GATHER_NODE_NAMES = ("gather_knowledge", "gather_analytics", "gather_operational", "gather_memory")
+GATHER_NODE_NAMES = ("gather_knowledge", "gather_analytics", "gather_operational")
 
 
 def build_graph(checkpointer=None):
@@ -53,7 +53,7 @@ def build_graph(checkpointer=None):
     builder.add_node("gather_knowledge", knowledge_node)
     builder.add_node("gather_analytics", analytics_node)
     builder.add_node("gather_operational", operational_node)
-    builder.add_node("gather_memory", memory_node)
+    builder.add_node("hydrate_memory", hydrate_memory_node)
     builder.add_node("planner", planner_node)
     builder.add_node("hitl_review", hitl_review_node)
     builder.add_node("commit", commit_node)
@@ -64,9 +64,12 @@ def build_graph(checkpointer=None):
     # Supervisor → fan-out (LangGraph runs all returned targets in the next superstep)
     builder.add_conditional_edges("supervisor", route_to_gatherers, list(GATHER_NODE_NAMES))
 
-    # All gather nodes converge on the planner (natural fan-in)
+    # All gather nodes converge on hydrate_memory (natural fan-in). Hydration runs after gather
+    # so supplier-note recall can scope to the suppliers the operational agent surfaced, then
+    # feeds the planner. interrupt() stays downstream of this fan-in, out of any parallel step.
     for n in GATHER_NODE_NAMES:
-        builder.add_edge(n, "planner")
+        builder.add_edge(n, "hydrate_memory")
+    builder.add_edge("hydrate_memory", "planner")
 
     # Planner → gate → HITL or commit
     builder.add_conditional_edges("planner", gate_router, ["hitl_review", "commit"])

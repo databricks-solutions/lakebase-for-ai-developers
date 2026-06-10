@@ -15,10 +15,16 @@ bundle:
   name: supply_chain_planner
 
 variables:
-  # Lakebase autoscaling coordinates (project/branch own the `primary` endpoint).
+  # Lakebase autoscaling coordinates. Dev/prod are isolated by BRANCH (copy-on-write) within the
+  # one workspace — the idiomatic Lakebase pattern. `demo` uses `production`; `dev` overrides to
+  # `development` (see targets below). Both halves of state — agent memory AND the operational
+  # synced-table clones — live on whichever branch the app connects to.
   lakebase_branch:
-    description: Lakebase branch resource the App connects to.
+    description: Lakebase branch RESOURCE PATH the App's postgres resource binds to.
     default: projects/mfg-supply-chain-copilot/branches/production
+  lakebase_branch_name:
+    description: Lakebase branch SHORT NAME passed to the app env (LAKEBASE_AUTOSCALING_BRANCH).
+    default: production
   lakebase_database:
     description: Lakebase Postgres database name.
     default: databricks_postgres
@@ -48,10 +54,15 @@ resources:
             value_from: "postgres"
           - name: LAKEBASE_AUTOSCALING_PROJECT
             value: "mfg-supply-chain-copilot"
+          # Branch is the dev/prod isolation boundary — overridden per target (dev → development).
           - name: LAKEBASE_AUTOSCALING_BRANCH
-            value: "production"
+            value: ${var.lakebase_branch_name}
           - name: LAKEBASE_DATABASE
             value: "databricks_postgres"
+          # Same schema NAME in every environment — isolation comes from the branch, not the name.
+          # Owned by the App service principal on each branch. Deploy-first: the SP must create
+          # this schema (store.setup) before any local run uses that branch, or it stays user-owned
+          # and the SP can't write. See data/operational/README.md → "Agent memory: dev vs prod".
           - name: LAKEBASE_AGENT_MEMORY_SCHEMA
             value: "supply_chain_planner_memory"
           - name: LAKEBASE_OPERATIONAL_SCHEMA
@@ -65,9 +76,10 @@ resources:
             value: "serverless_stable_yau46e_catalog"
           - name: UC_SCHEMA
             value: "planner"
-          # Single inference model for v1 (router/retrieval/planner).
+          # Router is a constrained classifier → fast small model (cuts ~3-12s/run vs Opus);
+          # planner stays Opus for complex synthesis. (retrieval endpoint is currently unused.)
           - name: LLM_ROUTER_ENDPOINT
-            value: "databricks-claude-opus-4-8"
+            value: "databricks-claude-haiku-4-5"
           - name: LLM_RETRIEVAL_ENDPOINT
             value: "databricks-claude-opus-4-8"
           - name: LLM_PLANNER_ENDPOINT
@@ -107,11 +119,16 @@ targets:
     default: true
     workspace:
       host: https://fevm-serverless-stable-yau46e.cloud.databricks.com
+    # Dev is isolated from the demo on its own copy-on-write branch (same workspace + project).
+    variables:
+      lakebase_branch: projects/mfg-supply-chain-copilot/branches/development
+      lakebase_branch_name: development
 
   demo:
     mode: production
     workspace:
       host: https://fevm-serverless-stable-yau46e.cloud.databricks.com
+    # demo uses the variable defaults (production branch).
     resources:
       apps:
         supply_chain_planner:

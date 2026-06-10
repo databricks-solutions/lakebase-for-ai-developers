@@ -9,14 +9,17 @@
 - `hitl_review_node`: a real `interrupt()` — the run pauses durably on the checkpoint, surfacing the
   recommendation as an approval card; it resumes when the app injects an HITLDecision via
   `Command(resume=...)`.
-- `commit_node`: P0 long-term memory is write-back-only — persist the verdict to the Lakebase store
-  (no hydrate-and-use yet).
+- `commit_node`: persist curated long-term memory to the Lakebase store via the policy in
+  `agent_server.memory` (audit every decision; learn preferences + supplier notes only from approved
+  action-bearing outcomes). Recall happens upstream in `hydrate_memory_node`, injected here via
+  `_memory_block`. Best-effort: a memory failure never fails the run.
 """
 
 from __future__ import annotations
 
 import logging
 
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
@@ -24,18 +27,12 @@ from pydantic import BaseModel, Field
 from agent_server.config import settings
 from agent_server.contracts import HITLDecision, HITLVerdict, PlannerRecommendation
 from agent_server.graph.state import AgentState
+from agent_server.memory import build_memory_writes, write_memories
 
 logger = logging.getLogger(__name__)
 
 # Above this estimated cost the gate trips and routes to HITL approval.
 APPROVAL_COST_THRESHOLD_USD = 50_000.0
-
-
-def approvals_namespace(user_id: str) -> tuple[str, str]:
-    """The long-term store namespace for a user's prior decisions. Single source of truth so
-    `commit_node` (write) and the memory recall node (read) always agree. LangGraph store
-    namespace labels can't contain '.', so map it to '-'."""
-    return ("approvals", (user_id or "unknown").replace(".", "-"))
 
 _SYSTEM_PROMPT = """\
 You are the planner for a supply-chain planning copilot. Given a planner's question and the
@@ -103,20 +100,55 @@ def _evidence_block(state: AgentState) -> str:
     if (kr := state.get("knowledge_result")) and kr.passages:
         lines = [f"  - [{p.source}] {(p.content or '')[:160]}" for p in kr.passages[:4]]
         parts.append("Knowledge passages:\n" + "\n".join(lines))
-    if (mr := state.get("memory_result")) and mr.memories:
-        lines = [
-            f"  - [{m.verdict or 'decision'}] {m.question or ''} → {m.summary or ''}"
-            + (f" (note: {m.note})" if m.note else "")
-            for m in mr.memories[:5]
-        ]
-        parts.append(
-            "Your prior decisions (long-term memory — recall and build on these when the "
-            "question refers to earlier conversations):\n" + "\n".join(lines)
-        )
     return "\n\n".join(parts) if parts else "No gather results were returned."
 
 
-def _llm_draft(question: str, evidence: str) -> _PlannerDraft | None:
+def _memory_block(state: AgentState) -> str:
+    """Render hydrated long-term memory into a compact prompt context (mirrors `_evidence_block`).
+
+    The hydrate node recalls the planner's own prior decisions; the system prompt tells the LLM to
+    build on them when the question refers to an earlier conversation, and ignore them otherwise."""
+    ctx = state.get("memory_context")
+    if not ctx or ctx.is_empty:
+        return ""
+    parts: list[str] = []
+    if ctx.preferences:
+        parts.append(
+            "Planner preferences (from prior approved decisions):\n"
+            + "\n".join(f"  - {m.text}" for m in ctx.preferences)
+        )
+    if ctx.prior_approvals:
+        parts.append(
+            "Relevant past decisions:\n" + "\n".join(f"  - {m.text}" for m in ctx.prior_approvals)
+        )
+    if ctx.supplier_notes:
+        parts.append(
+            "Known supplier notes:\n" + "\n".join(f"  - {m.text}" for m in ctx.supplier_notes)
+        )
+    return "\n\n".join(parts)
+
+
+def _history_block(state: AgentState) -> str:
+    """Render the recent conversation turns into a compact prompt context (WS1 short-term memory).
+
+    The current turn's question is passed to the planner separately, so exclude it here and show
+    only the prior turns — trimmed to the last `short_term_keep_recent` (older turns are dropped,
+    not summarized, for now). This lets follow-ups resolve referents ("that SKU", "the same
+    supplier") from earlier in the same conversation."""
+    msgs = state.get("messages") or []
+    prior = msgs[:-1]  # drop the just-appended HumanMessage for the current question
+    if not prior:
+        return ""
+    recent = prior[-settings.short_term_keep_recent:]
+    lines = []
+    for m in recent:
+        role = "User" if getattr(m, "type", "") == "human" else "Assistant"
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        lines.append(f"  {role}: {content[:300]}")
+    return "Earlier in this conversation:\n" + "\n".join(lines)
+
+
+def _llm_draft(question: str, evidence: str, memory: str = "", history: str = "") -> _PlannerDraft | None:
     """Try the LLM planner. Returns None on any failure so the caller can fall back."""
     try:
         from databricks_langchain import ChatDatabricks
@@ -126,10 +158,20 @@ def _llm_draft(question: str, evidence: str) -> _PlannerDraft | None:
         # NB: no temperature — Opus-class reasoning models reject the param (BAD_REQUEST).
         llm = ChatDatabricks(endpoint=settings.llm_planner_endpoint)
         structured = llm.with_structured_output(_PlannerDraft)
+        user_content = f"Question:\n{question}\n\nEvidence:\n{evidence}"
+        if memory:
+            # Memory is advisory: prefer it to personalize, but ground claims in current evidence.
+            user_content = (
+                "Recalled memory (consider it to personalize, but ground every claim in the "
+                f"current evidence below):\n{memory}\n\n" + user_content
+            )
+        if history:
+            # Short-term conversation context — resolve follow-up referents from earlier turns.
+            user_content = f"{history}\n\n" + user_content
         return structured.invoke(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"Question:\n{question}\n\nEvidence:\n{evidence}"},
+                {"role": "user", "content": user_content},
             ]
         )
     except Exception as exc:
@@ -157,7 +199,9 @@ def planner_node(state: AgentState) -> dict:
     """Compose a recommendation via the planner LLM (with deterministic gate + citations)."""
     question = state.get("question", "")
     evidence = _evidence_block(state)
-    draft = _llm_draft(question, evidence) or _fallback_draft(state, question)
+    memory = _memory_block(state)
+    history = _history_block(state)
+    draft = _llm_draft(question, evidence, memory, history) or _fallback_draft(state, question)
 
     # Deterministic gate: a recommendation needs human approval when it COMMITS SPEND / is
     # risky-irreversible (is_action_bearing), OR when a known cost clears the threshold. Purely
@@ -183,9 +227,13 @@ def planner_node(state: AgentState) -> dict:
     notes = [
         *notes,
         f"planner → needs_approval={rec.needs_approval} "
-        f"(action_bearing={rec.is_action_bearing}, est {cost})",
+        f"(action_bearing={rec.is_action_bearing}, est {cost}, memory={'used' if memory else 'none'}, "
+        f"history={'used' if history else 'none'})",
     ]
-    return {"recommendation": rec, "trace_notes": notes}
+    # Record the assistant turn (the recommendation one-liner) into short-term history so the
+    # NEXT turn on this thread can resolve follow-up referents. add_messages appends it.
+    return {"recommendation": rec, "trace_notes": notes,
+            "messages": [AIMessage(content=rec.summary)]}
 
 
 def gate_router(state: AgentState) -> str:
@@ -232,32 +280,20 @@ def _coerce_decision(resume_value, user_id: str) -> HITLDecision:
 
 
 async def commit_node(state: AgentState, config: RunnableConfig) -> dict:
-    """Finalize. P0 long-term memory is write-back-only: persist the verdict to the Lakebase
-    store (hydrate-and-use is parked). No-op if no store is configured (offline tests)."""
+    """Finalize. Persist curated long-term memory per `agent_server.memory.build_memory_writes`
+    (audit every decision; learn preferences + supplier notes only from approved action-bearing
+    outcomes). No-op if no store is configured (offline tests). Never fails the run on a write."""
     decision = state.get("hitl_decision")
-    rec = state.get("recommendation")
-    user_id = state.get("user_id", "unknown")
 
     configurable = config.get("configurable", {}) if config else {}
     store = configurable.get("store")
     thread_id = configurable.get("thread_id", "unknown")
 
-    persisted = False
-    if store is not None:
-        try:
-            namespace = approvals_namespace(user_id)
-            value = {
-                "question": state.get("question"),
-                "recommendation": rec.model_dump() if rec else None,
-                "verdict": decision.verdict.value if decision else None,
-                "note": decision.note if decision else None,
-            }
-            await store.aput(namespace, thread_id, value)
-            persisted = True
-        except Exception as exc:  # never fail the run on a memory write
-            logger.warning("Commit write-back to store failed: %s", exc)
+    writes = build_memory_writes(state, decision, thread_id)
+    counts = await write_memories(store, writes)
 
+    verdict = decision.verdict.value if decision else "n/a"
+    written = ", ".join(f"{k}={v}" for k, v in counts.items()) if counts else "skipped"
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, f"commit → finalized (verdict={decision.verdict.value if decision else 'n/a'}, "
-                     f"store_write={'ok' if persisted else 'skipped'})"]
+    notes = [*notes, f"commit → finalized (verdict={verdict}, memory_writes={written})"]
     return {"trace_notes": notes}

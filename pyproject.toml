@@ -57,7 +57,9 @@ packages = ["agent_server"]
 # is an alias for now; Slice 4 repoints it at a launcher that also boots the Next.js frontend.
 start-server = "agent_server.start_server:main"
 start-app = "agent_server.start_server:main"
-agent-evaluate = "agent_server.evaluate_agent:evaluate"
+# Dispatches: bare → evaluate_direct (legacy), --harness → evaluate (legacy), --layer/--fast/--full
+# → the eval flywheel (graph|server layer, quality + trace-shape scorers, baseline diff).
+agent-evaluate = "agent_server.evaluation.cli:main"
 
 [dependency-groups]
 dev = [
