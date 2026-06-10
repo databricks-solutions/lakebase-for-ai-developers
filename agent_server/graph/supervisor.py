@@ -16,6 +16,18 @@ from agent_server.contracts import RouterDecision
 from agent_server.graph.state import AgentState
 
 
+def _stream_writer():
+    """Return the LangGraph custom-stream writer, or None when not in a streaming context.
+
+    get_stream_writer() RAISES outside a runnable context (not returns None), so guard with
+    try/except — this keeps the invoke path and unit tests safe."""
+    try:
+        from langgraph.config import get_stream_writer
+        return get_stream_writer()
+    except Exception:
+        return None
+
+
 _SYSTEM_PROMPT = """\
 You are the supervisor for a supply-chain planning copilot. Given a planner's question,
 decide which subset of the gather agents to invoke. Return STRICT JSON matching the
@@ -86,6 +98,10 @@ def supervisor_node(state: AgentState) -> dict:
     fans out to the chosen gather nodes."""
     question = state.get("question", "")
     decision = _llm_route(question) or _keyword_route(question)
+    note = f"supervisor → {decision.agents}: {decision.reasoning}"
     notes = state.get("trace_notes", []) or []
-    notes = [*notes, f"supervisor → {decision.agents}: {decision.reasoning}"]
+    notes = [*notes, note]
+    if w := _stream_writer():
+        w({"kind": "route", "agents": decision.agents, "reasoning": decision.reasoning})
+        w({"kind": "trace", "note": note})
     return {"route_decision": decision, "trace_notes": notes}

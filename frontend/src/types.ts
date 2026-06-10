@@ -34,6 +34,7 @@ export interface ChatMessage {
   pending?: boolean;
   error?: boolean;
   steps?: string[]; // live progress labels while streaming
+  route?: string[]; // gather agents chosen by the supervisor for this turn
 }
 
 export interface Session {
