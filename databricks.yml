@@ -77,11 +77,9 @@ resources:
           - name: UC_SCHEMA
             value: "planner"
           # Router is a constrained classifier → fast small model (cuts ~3-12s/run vs Opus);
-          # planner stays Opus for complex synthesis. (retrieval endpoint is currently unused.)
+          # planner stays Opus for complex synthesis.
           - name: LLM_ROUTER_ENDPOINT
             value: "databricks-claude-haiku-4-5"
-          - name: LLM_RETRIEVAL_ENDPOINT
-            value: "databricks-claude-opus-4-8"
           - name: LLM_PLANNER_ENDPOINT
             value: "databricks-claude-opus-4-8"
           - name: CHAT_APP_PORT
