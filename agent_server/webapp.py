@@ -27,6 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
+import asyncio
 import json
 import uuid
 
@@ -312,6 +313,62 @@ def _store():
     return store
 
 
+# ── Lakebase connection resilience ──────────────────────────────────────────────────────────
+# Lakebase autoscaling scales to zero when idle and rotates OAuth DB creds hourly. When that
+# happens the long-lived pool holds connections the server has already terminated, so the first
+# request from a user after an idle period grabs a dead connection and fails with one of these.
+# The pool discards the BAD connection (self-heals) — so simply RETRYING gets a fresh one.
+_TRANSIENT_DB_MARKERS = (
+    "terminating connection due to administrator command",  # 57P01 — scale-to-zero / restart
+    "ssl connection has been closed unexpectedly",
+    "consuming input failed",
+    "connection is lost",
+    "the connection is closed",
+    "connection already closed",
+    "server closed the connection unexpectedly",
+    "bad connection",
+)
+
+
+def _is_transient_db_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    if any(m in msg for m in _TRANSIENT_DB_MARKERS):
+        return True
+    try:
+        import psycopg
+
+        return isinstance(exc, psycopg.OperationalError)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _with_db_retry(make_coro, *, attempts: int = 3, base_delay: float = 0.4):
+    """Run an async Lakebase op, retrying transient connection drops. `make_coro` is a 0-arg
+    callable returning a FRESH coroutine each attempt (a coroutine can't be awaited twice)."""
+    for i in range(attempts):
+        try:
+            return await make_coro()
+        except Exception as exc:  # noqa: BLE001
+            if not _is_transient_db_error(exc) or i == attempts - 1:
+                raise
+            logger.info("transient Lakebase error (attempt %d/%d): %s", i + 1, attempts, exc)
+            await asyncio.sleep(base_delay * (i + 1))
+
+
+async def _warm_lakebase(checkpointer, store, config) -> None:
+    """Best-effort: force the pools to drop stale (idled / rotated) connections and pick up fresh
+    ones BEFORE the graph run, so a new-after-idle user's chat doesn't die mid-stream. Retries
+    transient drops; ignores anything else (the real run surfaces genuine errors)."""
+    for ping in (
+        lambda: store.aget(("__healthcheck__",), "ping"),
+        lambda: checkpointer.aget_tuple(config),
+    ):
+        try:
+            await _with_db_retry(ping)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("lakebase warm-up ping skipped: %s", exc)
+
+
 def _ns_label(email: str) -> str:
     """LangGraph store namespace labels can't contain '.' (or other punctuation) — emails do.
     Sanitize to a deterministic alnum/underscore label so upsert + list use the same namespace."""
@@ -324,7 +381,8 @@ def _ns_label(email: str) -> str:
 async def list_sessions(request: Request) -> dict[str, Any]:
     caller = caller_identity(request)
     try:
-        items = await _store().asearch(("ui_sessions", _ns_label(caller.email)), limit=100)
+        ns = ("ui_sessions", _ns_label(caller.email))
+        items = await _with_db_retry(lambda: _store().asearch(ns, limit=100))
         sessions = sorted(
             ({"thread_id": it.key, **(it.value or {})} for it in items),
             key=lambda s: s.get("updated_at", ""), reverse=True,
@@ -344,7 +402,8 @@ async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] 
         "preview": (body.get("preview") or "")[:200],
     }
     try:
-        await _store().aput(("ui_sessions", _ns_label(caller.email)), thread_id, value)
+        ns = ("ui_sessions", _ns_label(caller.email))
+        await _with_db_retry(lambda: _store().aput(ns, thread_id, value))
     except Exception as exc:  # noqa: BLE001
         logger.warning("upsert_session failed: %s", exc)
     return {"thread_id": thread_id, **value}
@@ -393,7 +452,9 @@ async def seed_demo_memories(request: Request) -> dict[str, Any]:
     written: list[str] = []
     for ns, key, value in demos:
         try:
-            await store.aput(ns, key, value, index=EMBED_INDEX)
+            await _with_db_retry(
+                lambda n=ns, k=key, v=value: store.aput(n, k, v, index=EMBED_INDEX)
+            )
             written.append(f"{ns[0]}/{key}")
         except Exception as exc:  # noqa: BLE001
             logger.warning("seed memory %s failed: %s", key, exc)
@@ -450,6 +511,9 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
 
             async with acquire_lakebase_resources(LAKEBASE_CONFIG) as (checkpointer, store):
                 config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "store": store}}
+                # Refresh stale pooled connections (scale-to-zero / hourly token rotation) before
+                # the run so a user arriving after idle doesn't get a connection drop mid-stream.
+                await _warm_lakebase(checkpointer, store, config)
                 graph = build_graph(checkpointer=checkpointer)
                 interrupt_payload = None
                 seen: set[str] = set()
