@@ -76,6 +76,14 @@ resources:
             value: "serverless_stable_yau46e_catalog"
           - name: UC_SCHEMA
             value: "planner"
+          # Knowledge agent (Mosaic AI Vector Search). Required at runtime — without these the
+          # deployed App's knowledge gather falls back to empty. NOTE: the App service principal
+          # also needs USE on the VS endpoint + SELECT on the index; VS isn't a clean DABs resource,
+          # so grant it manually (like the Genie space carve-out).
+          - name: VECTOR_SEARCH_ENDPOINT
+            value: "supply-chain-planner-vs"
+          - name: VECTOR_SEARCH_INDEX
+            value: "serverless_stable_yau46e_catalog.planner.knowledge_chunks_index"
           # Router is a constrained classifier → fast small model (cuts ~3-12s/run vs Opus);
           # planner stays Opus for complex synthesis.
           - name: LLM_ROUTER_ENDPOINT

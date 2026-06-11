@@ -582,7 +582,7 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
 
     async def gen():
         try:
-            from agent_server.agent import LAKEBASE_CONFIG, _custom_outputs, _final_text
+            from agent_server.agent import LAKEBASE_CONFIG, _custom_outputs, _final_text, _trace_url
             from agent_server.contracts import HITLDecision, HITLVerdict
             from agent_server.graph.build_graph import build_graph
             from agent_server.lakebase import acquire_lakebase_resources
@@ -648,6 +648,7 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
                     "type": "done",
                     "thread_id": thread_id,
                     "trace_id": trace_id,  # client attaches 👍/👎 feedback to this trace
+                    "trace_url": _trace_url(trace_id),  # ready-made workspace deep-link (avoids the 404 path)
                     "text": _final_text(state, interrupt_payload),
                     "extras": _custom_outputs(state, interrupt_payload),
                 })
@@ -674,9 +675,9 @@ def feedback(request: Request, body: dict[str, Any] = Body(default={})) -> dict[
         raise HTTPException(400, "trace_id is required")
     try:
         import mlflow
-        from mlflow.entities.feedback import FeedbackSource
+        from mlflow.entities import AssessmentSource
 
-        source = FeedbackSource(source_type="HUMAN", source_id=caller.email)
+        source = AssessmentSource(source_type="HUMAN", source_id=caller.email)
         mlflow.log_feedback(trace_id=trace_id, name="thumbs_up", value=bool(body.get("value")), source=source)
         if body.get("comment"):
             mlflow.log_feedback(trace_id=trace_id, name="comment", value=str(body["comment"]), source=source)

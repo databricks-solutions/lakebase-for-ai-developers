@@ -157,10 +157,9 @@ function Extras({ extras, onResume, onGoToReview, busy, workspaceHost }: { extra
     rec?.est_cost_usd != null
       ? `$${Number(rec.est_cost_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : "—";
-  const traceUrl =
-    workspaceHost && extras.trace_id
-      ? `${workspaceHost.replace(/\/$/, "")}/ml/traces/${extras.trace_id}`
-      : null;
+  // The backend emits a ready-made, experiment-scoped trace deep-link (the bare /ml/traces/{id}
+  // path 404s, and the frontend has no experiment id to build the correct URL itself).
+  const traceUrl = extras.trace_url ?? null;
   return (
     <div style={{ marginTop: 8, maxWidth: "100%", display: "grid", gap: 8 }}>
       {chips.length > 0 && (

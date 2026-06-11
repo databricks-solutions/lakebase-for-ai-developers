@@ -50,7 +50,8 @@ export interface ReviewPanelProps {
   /** The paused recommendation pulled from the active thread's last assistant message. */
   recommendation?: AgentExtras["recommendation"];
   evidence?: EvidenceBundle;
-  traceId?: string | null;
+  /** Backend-built workspace deep-link to the run's trace (the bare /ml/traces/{id} path 404s). */
+  traceUrl?: string | null;
   workspaceHost?: string;
   busy: boolean;
   /** Whether a plan is actually awaiting review (the message carried an approval_request). */
@@ -62,13 +63,10 @@ export interface ReviewPanelProps {
   committed: boolean;
 }
 
-const traceUrl = (host?: string, traceId?: string | null) =>
-  host && traceId ? `${host.replace(/\/$/, "")}/ml/traces/${traceId}` : null;
-
 export function ReviewPanel({
   recommendation,
   evidence,
-  traceId,
+  traceUrl,
   workspaceHost,
   busy,
   hasPausedPlan,
@@ -114,7 +112,7 @@ export function ReviewPanel({
       recommendation={recommendation}
       actions={actions}
       evidence={evidence}
-      traceId={traceId}
+      traceUrl={traceUrl}
       workspaceHost={workspaceHost}
       busy={busy}
       committed={committed}
@@ -128,7 +126,7 @@ function ReviewBody({
   recommendation,
   actions,
   evidence,
-  traceId,
+  traceUrl,
   workspaceHost,
   busy,
   committed,
@@ -138,7 +136,7 @@ function ReviewBody({
   recommendation?: AgentExtras["recommendation"];
   actions: PlannedAction[];
   evidence?: EvidenceBundle;
-  traceId?: string | null;
+  traceUrl?: string | null;
   workspaceHost?: string;
   busy: boolean;
   committed: boolean;
@@ -218,7 +216,7 @@ function ReviewBody({
     void onResumeStructured({ verdict: "approved", rationale: rationale.trim(), action_decisions });
   };
 
-  const tUrl = traceUrl(workspaceHost, traceId);
+  const tUrl = traceUrl ?? null;
 
   return (
     <Page>

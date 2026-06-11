@@ -110,6 +110,7 @@ export interface AgentExtras {
   trace_notes?: string[];
   operational_sql?: string;
   trace_id?: string | null; // MLflow trace id — 👍/👎 feedback attaches to this
+  trace_url?: string | null; // backend-built workspace deep-link to the trace (avoids the 404 path)
   [k: string]: unknown;
 }
 

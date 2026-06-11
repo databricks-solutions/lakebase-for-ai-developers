@@ -92,7 +92,7 @@ async function consumeSSE(
         let obj: any;
         try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
         if (obj.type === "step" && obj.label) handlers.onStep?.(obj.label);
-        else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", { ...(obj.extras ?? {}), trace_id: obj.trace_id } as AgentExtras);
+        else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", { ...(obj.extras ?? {}), trace_id: obj.trace_id, trace_url: obj.trace_url } as AgentExtras);
         else if (obj.type === "error") handlers.onError(obj.error || "stream error");
         else if (obj.type === "substep" && obj.label) handlers.onSubstep?.(obj.node ?? "", obj.label);
         else if (obj.type === "trace" && obj.note) handlers.onTrace?.(obj.note);

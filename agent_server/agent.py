@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 mlflow.langchain.autolog()
 logging.getLogger("mlflow.utils.autologging_utils").setLevel(logging.ERROR)
 
+# Resolved at startup by _setup_mlflow_experiment() — used to build trace deep-links (the
+# frontend has no MLFLOW_EXPERIMENT_ID; the experiment is resolved per-user at runtime).
+_EXPERIMENT_ID: str | None = None
+
 
 def _export_local_trace_credentials() -> None:
     """Local U2M wrinkle: MLflow's async trace exporter doesn't resolve OAuth-profile creds, so
@@ -73,6 +77,7 @@ def _setup_mlflow_experiment() -> None:
     reachable API path. When MLFLOW_TRACE_CATALOG/SCHEMA are set we bind the experiment to that
     UC location (+ a SQL warehouse for trace storage); otherwise fall back to plain experiment
     tracing (local dev / eval)."""
+    global _EXPERIMENT_ID
     try:
         trace_location = None
         cat = settings.mlflow_trace_catalog or settings.uc_catalog
@@ -98,9 +103,10 @@ def _setup_mlflow_experiment() -> None:
             # experiment must have NO existing traces for a UC destination to bind.
             if trace_location is not None:
                 exp = mlflow.get_experiment(settings.mlflow_experiment_id)
-                mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
+                resolved = mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
             else:
-                mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+                resolved = mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+            _EXPERIMENT_ID = getattr(resolved, "experiment_id", None) or settings.mlflow_experiment_id
         elif mlflow.get_tracking_uri() == "databricks":
             from databricks.sdk import WorkspaceClient
 
@@ -108,15 +114,29 @@ def _setup_mlflow_experiment() -> None:
             # No explicit experiment → a dedicated per-user experiment (UC dest needs trace-free).
             name = f"/Users/{me}/supply-chain-planner-uc" if trace_location is not None else f"/Users/{me}/supply-chain-planner"
             if trace_location is not None:
-                mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
+                resolved = mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
             else:
-                mlflow.set_experiment(name)
+                resolved = mlflow.set_experiment(name)
+            _EXPERIMENT_ID = getattr(resolved, "experiment_id", None) or settings.mlflow_experiment_id
         if trace_location is not None:
             logger.info("MLflow UC tracing → %s.%s (prefix=%s) on experiment %s",
                         cat, sch, settings.mlflow_trace_table_prefix,
                         settings.mlflow_experiment_id or f"/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
         logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
+
+
+def _trace_url(trace_id: str | None) -> str | None:
+    """Workspace deep-link to a trace: the experiment-scoped traces view with the trace
+    pre-selected. The bare /ml/traces/{id} path 404s."""
+    if not trace_id or not _EXPERIMENT_ID:
+        return None
+    from agent_server.obo import workspace_host  # lazy: avoid import cycle
+
+    host = workspace_host()
+    if not host:
+        return None
+    return f"{host.rstrip('/')}/ml/experiments/{_EXPERIMENT_ID}/traces?selectedEvaluationId={trace_id}"
 
 
 _export_local_trace_credentials()

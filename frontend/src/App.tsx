@@ -190,7 +190,7 @@ export default function App() {
               <ReviewPanel
                 recommendation={pausedRecommendation}
                 evidence={pausedMsg?.extras?.evidence}
-                traceId={pausedMsg?.extras?.trace_id ?? null}
+                traceUrl={pausedMsg?.extras?.trace_url ?? null}
                 workspaceHost={me?.workspace_host}
                 busy={busy}
                 hasPausedPlan={hasPausedPlan}
