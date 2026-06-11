@@ -96,6 +96,23 @@ supplier **DuPont (SUP-002)**. Other clusters: **Nucor (SUP-005)** fasteners, **
 For the hero question, also test the **reject** path: approvals are always written (audit), but
 preferences/supplier-notes are written **only on approve**.
 
+**Tier 2b — write-back tables** (the structured plan persists to Postgres, visible on the **Lakebase** tab)
+
+An action-bearing question proposes a structured plan; on the **Review** tab you approve / edit / hold
+each action and commit, which writes rows to three Lakebase tables. Which table a row lands in is set
+by the action kind:
+
+| To fill… | Ask | Proposes (kinds) |
+|---|---|---|
+| **all three at once** | Henkel SKU-1001 keeps cracking — give me a full containment plan: hold the on-hand lot, quarantine the incoming PO, tighten incoming inspection, and hold Henkel until they're re-validated. | `quality_hold` + `quarantine_po` → approved_actions, `tighten_inspection` → planning_parameters, `supplier_quality_hold` → constraints |
+| **`approved_actions`** | Henkel SKU-1001 is failing the adhesion test — quarantine the incoming 500-unit PO and bridge-source a buffer from DuPont. | `quarantine_po`, `split_source` |
+| **`planning_parameters`** | Given the recurring SKU-1001 quality failures, raise the incoming-inspection level and bump safety stock until the defect is contained. | `tighten_inspection`, `raise_safety_stock` |
+| **`constraints`** | Put a quality hold on Henkel/SUP-001 for SKU-1001 until they pass re-validation, and prioritize the EV inverter program for the constrained on-hand. | `supplier_quality_hold`, `allocation_constraint` |
+
+Only **approved** actions write rows (held ones don't), and you can only act on kinds the planner
+proposed — phrase the ask with the verbs above (*hold, quarantine, inspect, expedite, split/bridge from
+DuPont, safety stock, hold the supplier, prioritize program X*) to elicit them.
+
 **Tier 3 — memory & follow-ups** (the differentiator)
 
 1. **Short-term referent resolution** — ask the hero question, approve, then in the *same* chat:

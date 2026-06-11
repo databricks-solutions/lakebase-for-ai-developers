@@ -265,29 +265,35 @@ def uc_tables(request: Request) -> dict[str, Any]:
         return {"catalog": settings.uc_catalog, "schema": settings.uc_schema, "tables": [], "error": str(exc)}
 
 
+def _app_creds_conn_str() -> str:
+    """Resolve a Lakebase psycopg conninfo using APP creds (short-lived OAuth DB credential).
+    Shared by the explorer peeks + the Meridian state-read endpoint so the connection form can't
+    drift. Local dev resolves via the configured profile; on the App the SP supplies creds."""
+    from databricks.sdk import WorkspaceClient
+
+    w = WorkspaceClient()
+    ep = settings.lakebase_autoscaling_endpoint or "primary"
+    full_ep = ep if ep.startswith("projects/") else (
+        f"projects/{settings.lakebase_autoscaling_project}/branches/"
+        f"{settings.lakebase_autoscaling_branch}/endpoints/{ep}"
+    )
+    endpoint = w.postgres.get_endpoint(name=full_ep)
+    host = endpoint.status.hosts.host
+    cred = w.postgres.generate_database_credential(endpoint=full_ep)
+    return (
+        f"host={host} dbname={settings.lakebase_database} "
+        f"user={w.current_user.me().user_name} password={cred.token} sslmode=require"
+    )
+
+
 @router.get("/explorer/pgvector")
 def pgvector_peek() -> dict[str, Any]:
     """Live peek at the operational pgvector table (count + a few rows). Uses app creds."""
     schema = settings.lakebase_operational_schema
     try:
         import psycopg
-        from databricks.sdk import WorkspaceClient
 
-        w = WorkspaceClient()
-        # Resolve the autoscaling endpoint host + a short-lived OAuth DB credential.
-        ep = settings.lakebase_autoscaling_endpoint or "primary"
-        full_ep = ep if ep.startswith("projects/") else (
-            f"projects/{settings.lakebase_autoscaling_project}/branches/"
-            f"{settings.lakebase_autoscaling_branch}/endpoints/{ep}"
-        )
-        endpoint = w.postgres.get_endpoint(name=full_ep)
-        host = endpoint.status.hosts.host
-        cred = w.postgres.generate_database_credential(endpoint=full_ep)
-        conn_str = (
-            f"host={host} dbname={settings.lakebase_database} "
-            f"user={w.current_user.me().user_name} password={cred.token} sslmode=require"
-        )
-        with psycopg.connect(conn_str, connect_timeout=10) as conn, conn.cursor() as cur:
+        with psycopg.connect(_app_creds_conn_str(), connect_timeout=10) as conn, conn.cursor() as cur:
             cur.execute(f"SELECT count(*) FROM {schema}.quality_incidents")
             total = cur.fetchone()[0]
             cur.execute(
@@ -510,6 +516,86 @@ async def seed_demo_memories(request: Request) -> dict[str, Any]:
     return {"written": written}
 
 
+# ── Meridian state read (committed write-back rows + recalled memory for one thread) ─────────
+# The UI's "Lakebase" tab reads back the structured rows the human's commit wrote, plus the
+# semantic memory the decision was embedded into. Each query is guarded → [] (so a thread that
+# hasn't committed yet, or a table that doesn't exist locally, renders cleanly).
+
+_STATE_TABLE_QUERIES = {
+    "approved_actions": (
+        "SELECT action_key, kind, po_id, supplier_id, sku, qty, cost_delta, status, rationale, "
+        "user_id, created_at FROM {schema}.approved_actions WHERE thread_id = %s ORDER BY created_at"
+    ),
+    "planning_parameters": (
+        "SELECT sku, parameter, old_value, new_value, rationale, user_id, created_at "
+        "FROM {schema}.planning_parameters WHERE thread_id = %s ORDER BY created_at"
+    ),
+    "constraints": (
+        "SELECT constraint_key, kind, sku, program, detail, rationale, user_id, created_at "
+        "FROM {schema}.constraints WHERE thread_id = %s ORDER BY created_at"
+    ),
+}
+
+
+@router.get("/state/tables")
+async def state_tables(request: Request, thread_id: str) -> dict[str, Any]:
+    """Read the Meridian write-back rows for one thread + the caller's recalled approval memory."""
+    caller = caller_identity(request)
+    schema = settings.lakebase_operational_schema
+    result: dict[str, Any] = {
+        "thread_id": thread_id,
+        "approved_actions": [],
+        "planning_parameters": [],
+        "constraints": [],
+        "recalled_memory": [],
+    }
+
+    # 1) Relational write-back rows (app creds psycopg). Guard each query so a missing table (not
+    #    yet created locally) or an empty thread degrades to [] + a per-table error note.
+    try:
+        import psycopg
+
+        with psycopg.connect(_app_creds_conn_str(), connect_timeout=10) as conn:
+            for table, sql in _STATE_TABLE_QUERIES.items():
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(sql.format(schema=schema), (thread_id,))
+                        cols = [d.name for d in cur.description]
+                        result[table] = [dict(zip(cols, r)) for r in cur.fetchall()]
+                except Exception as exc:  # noqa: BLE001 — e.g. table doesn't exist yet
+                    conn.rollback()
+                    result[table] = []
+                    result.setdefault("errors", {})[table] = str(exc)
+    except Exception as exc:  # noqa: BLE001 — connection failed entirely
+        logger.warning("state/tables read failed: %s", exc)
+        result.setdefault("errors", {})["connection"] = str(exc)
+
+    # 2) Recalled long-term memory (the decision's embedded approval text), via the open store.
+    try:
+        from agent_server.memory import recall_approvals
+
+        store = _store()
+        # Recall approvals semantically related to what was committed in this thread — use the
+        # committed rationale(s) as the search query, not the opaque thread_id (which is not a
+        # meaningful embedding query). Falls back to "" when nothing was written.
+        recall_query = " ".join(
+            str(r.get("rationale") or "") for r in result["approved_actions"]
+        ).strip()
+        items = await _with_db_retry(
+            lambda: recall_approvals(
+                store, caller.email, recall_query, settings.memory_recall_limit, None
+            )
+        )
+        result["recalled_memory"] = [
+            {"text": m.text, "score": m.score, "namespace": m.namespace} for m in (items or [])
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("state/tables memory recall failed: %s", exc)
+        result.setdefault("errors", {})["recalled_memory"] = str(exc)
+
+    return result
+
+
 # ── Streaming chat (SSE) ──────────────────────────────────────────────────────────────────
 # Drives the graph and streams live step progress (route → gather → plan → gate) + the final
 # answer. Runs behind the OBO middleware (so Knowledge/Genie call as the user) and reuses the
@@ -538,11 +624,14 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
     thread_id = str(body.get("thread_id") or uuid.uuid4().hex)
     verdict = body.get("verdict")  # "approved" | "rejected" → resume a paused HITL run
     note = body.get("note")
+    rationale = body.get("rationale")
+    # Per-action review payload: accept either `action_decisions` or a `decisions` alias.
+    action_decisions = body.get("action_decisions") or body.get("decisions") or []
     user_id = caller.email
 
     async def gen():
         try:
-            from agent_server.agent import LAKEBASE_CONFIG, _custom_outputs, _final_text
+            from agent_server.agent import LAKEBASE_CONFIG, _custom_outputs, _final_text, _trace_url
             from agent_server.contracts import HITLDecision, HITLVerdict
             from agent_server.graph.build_graph import build_graph
             from agent_server.lakebase import acquire_lakebase_resources
@@ -550,8 +639,14 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
 
             # Resume the paused run with the verdict, or start a fresh question.
             if verdict:
+                # Enforce the required rationale at this edge: an approved Meridian commit must carry
+                # the human's reasoning. Surface as an SSE error frame before driving the graph.
+                if str(verdict) == "approved" and not (rationale and str(rationale).strip()):
+                    yield _sse({"type": "error", "error": "A rationale is required to approve."})
+                    return
                 graph_input: Any = Command(resume=HITLDecision(
                     verdict=HITLVerdict(verdict), user_id=user_id, note=note,
+                    rationale=rationale, action_decisions=action_decisions,
                 ).model_dump())
                 yield _sse({"type": "step", "label": f"Recording {verdict} decision…"})
             else:
@@ -602,6 +697,7 @@ async def chat_stream(request: Request, body: dict[str, Any] = Body(default={}))
                     "type": "done",
                     "thread_id": thread_id,
                     "trace_id": trace_id,  # client attaches 👍/👎 feedback to this trace
+                    "trace_url": _trace_url(trace_id),  # ready-made workspace deep-link (avoids the 404 path)
                     "text": _final_text(state, interrupt_payload),
                     "extras": _custom_outputs(state, interrupt_payload),
                 })
@@ -628,9 +724,9 @@ def feedback(request: Request, body: dict[str, Any] = Body(default={})) -> dict[
         raise HTTPException(400, "trace_id is required")
     try:
         import mlflow
-        from mlflow.entities.feedback import FeedbackSource
+        from mlflow.entities import AssessmentSource
 
-        source = FeedbackSource(source_type="HUMAN", source_id=caller.email)
+        source = AssessmentSource(source_type="HUMAN", source_id=caller.email)
         mlflow.log_feedback(trace_id=trace_id, name="thumbs_up", value=bool(body.get("value")), source=source)
         if body.get("comment"):
             mlflow.log_feedback(trace_id=trace_id, name="comment", value=str(body["comment"]), source=source)

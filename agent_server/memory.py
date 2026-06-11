@@ -67,12 +67,21 @@ class MemoryWrite:
     index: Optional[list[str]] = field(default=None)
 
 
-def _approval_text(question: Optional[str], verdict: Optional[str], summary: Optional[str]) -> str:
+def _approval_text(
+    question: Optional[str],
+    verdict: Optional[str],
+    summary: Optional[str],
+    rationale: Optional[str] = None,
+) -> str:
     q = (question or "").strip() or "(no question)"
-    return f"{q} → {verdict or 'n/a'}: {summary or '(no recommendation)'}"
+    base = f"{q} → {verdict or 'n/a'}: {summary or '(no recommendation)'}"
+    # Carry the human's rationale into the embedded text so the recalled decision explains WHY.
+    if rationale and rationale.strip():
+        base += f" | rationale: {rationale.strip()}"
+    return base
 
 
-def _preference_text(rec, note: Optional[str]) -> str:
+def _preference_text(rec, note: Optional[str], rationale: Optional[str] = None) -> str:
     """Distil an approved decision into a reusable planner preference (deterministic for now;
     an LLM-distilled version is a later refinement)."""
     base = f"Approved approach: {rec.summary}"
@@ -80,6 +89,8 @@ def _preference_text(rec, note: Optional[str]) -> str:
         base += " | actions: " + "; ".join(rec.actions[:2])
     if note:
         base += f" | planner note: {note}"
+    if rationale and rationale.strip():
+        base += f" | rationale: {rationale.strip()}"
     return base
 
 
@@ -100,6 +111,7 @@ def build_memory_writes(
     user_id = state.get("user_id", "unknown")
     verdict = decision.verdict.value if decision else None
     note = decision.note if decision else None
+    rationale = decision.rationale if decision else None
     summary = rec.summary if rec else None
 
     writes: list[MemoryWrite] = []
@@ -114,7 +126,8 @@ def build_memory_writes(
                 "recommendation": rec.model_dump() if rec else None,
                 "verdict": verdict,
                 "note": note,
-                MEMORY_TEXT_FIELD: _approval_text(question, verdict, summary),
+                "rationale": rationale,
+                MEMORY_TEXT_FIELD: _approval_text(question, verdict, summary, rationale),
             },
             index=EMBED_INDEX,
         )
@@ -131,7 +144,7 @@ def build_memory_writes(
             namespace=preferences_ns(user_id),
             key=thread_id,
             value={
-                MEMORY_TEXT_FIELD: _preference_text(rec, note),
+                MEMORY_TEXT_FIELD: _preference_text(rec, note, rationale),
                 "question": question,
                 "source_thread": thread_id,
             },

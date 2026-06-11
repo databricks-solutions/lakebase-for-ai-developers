@@ -17,7 +17,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
@@ -25,7 +27,15 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from agent_server.config import settings
-from agent_server.contracts import HITLDecision, HITLVerdict, PlannerRecommendation
+from agent_server.contracts import (
+    ActionDecision,
+    ActionFact,
+    ActionKind,
+    HITLDecision,
+    HITLVerdict,
+    PlannedAction,
+    PlannerRecommendation,
+)
 from agent_server.graph.state import AgentState
 from agent_server.memory import build_memory_writes, write_memories
 
@@ -87,7 +97,65 @@ Return these fields:
 - "Remind me what we decided this morning about SKU-1001." -> false (recalls an existing decision).
 - "Recommend a mitigation for the recurring adhesive cracking." -> true (proposes new action: reorder / expedite / quarantine).
 - "Find related notes and similar incidents, and recommend whether to pre-buy ahead of the price increase." -> true (gates a new spend decision, even if you advise caution).
-</is_action_bearing_examples>"""
+</is_action_bearing_examples>
+
+<structured_plan>
+When the recommendation is action-bearing, ALWAYS ALSO return `planned_actions`: at most 4
+concrete, reviewable actions, each grounded in the evidence block. Never return only free-text
+`actions` — every action-bearing recommendation MUST populate `planned_actions` so a planner can
+review and commit each one. Pick the playbook that fits the question.
+
+QUALITY playbook — for quality questions (recurring defects, cracking, adhesion/thermal
+failures, a supplier's repeated quality issues). Contain the defect, then optionally re-source:
+- QUALITY_HOLD — hold the on-hand units pending validation. Set `sku`/`supplier_id` and `qty`
+  to the units to hold (the on-hand count from the matched row).
+- QUARANTINE_PO — quarantine/inspect an incoming PO before it lands. Cite the `po_id` from the
+  operational rows; set `qty` to the PO units and `supplier_id`/`sku`.
+- TIGHTEN_INSPECTION — raise the incoming-inspection level for the SKU. Set `sku` and `qty` to
+  the proposed inspection percentage.
+- SUPPLIER_QUALITY_HOLD — rule: hold this supplier's SKU until quality is validated. Set
+  `supplier_id` and `sku`; put scope + the "until validated" condition in `facts`.
+- (optional) SPLIT_SOURCE — bridge order from the ALTERNATE supplier (e.g. DuPont) to re-source
+  while the primary is held. Set `supplier_id` to the alternate, plus `sku`/`qty`.
+
+SHORTAGE playbook — for shortage questions (coverage gap, supplier delay, force-majeure):
+- EXPEDITE_PO — pull in an existing open PO. Cite the `po_id`; set `qty`, `supplier_id`, `sku`.
+- SPLIT_SOURCE — buffer order from the ALTERNATE supplier (not the flagged primary). Set
+  `supplier_id` to the alternate, plus `sku` and `qty`.
+- RAISE_SAFETY_STOCK — bump the SKU's safety stock. Set `sku` and `qty` to the proposed level.
+- ALLOCATION_CONSTRAINT — prioritize a program/customer for the constrained SKU. Set `sku` and
+  `program`.
+
+Worked QUALITY example — "Show me similar quality issues for Henkel (SUP-001/SKU-1001 epoxy
+cracking), joined to on-hand inventory and open POs" with 40 on-hand and a 500-unit incoming PO:
+1. QUALITY_HOLD — hold the 40 on-hand SKU-1001 units pending adhesion/thermal validation.
+2. QUARANTINE_PO — quarantine the incoming 500-unit SUP-001 PO and inspect before receipt.
+3. TIGHTEN_INSPECTION — raise SKU-1001 incoming-inspection level until the defect is contained.
+4. SUPPLIER_QUALITY_HOLD — no new SUP-001/SKU-1001 acceptance until quality is validated.
+
+Each action: a short `title`, a one-sentence `detail`, a `cost_delta` when you can estimate it,
+and `facts` — 1-3 short evidence snippets ("on-hand: 40 units", "incoming PO: 500 units").
+Do not invent po_ids, suppliers, or quantities — ground every field in the evidence.
+If a relevant past decision is recalled (memory block non-empty), state in `reasoning` how this
+plan builds on or differs from it.
+</structured_plan>"""
+
+
+class _PlannedActionDraft(BaseModel):
+    """LLM-authored shape of one structured action. CODE deterministically maps this →
+    PlannedAction (key, target_table, slider bounds, evidence_refs) so the durable contract is
+    not at the model's mercy."""
+
+    kind: ActionKind
+    title: str
+    detail: str
+    qty: float | None = None
+    cost_delta: float | None = None
+    sku: str | None = None
+    supplier_id: str | None = None
+    po_id: str | None = None
+    program: str | None = None
+    facts: list[str] = Field(default_factory=list)
 
 
 class _PlannerDraft(BaseModel):
@@ -98,6 +166,27 @@ class _PlannerDraft(BaseModel):
     is_action_bearing: bool = True  # commits spend / risky-irreversible vs purely informational
     est_cost_usd: float | None = None
     reasoning: str | None = None
+    planned_actions: list[_PlannedActionDraft] = Field(default_factory=list)
+
+
+# Maps each action kind to its durable write-back table (decided by CODE, not the LLM).
+_KIND_TO_TABLE: dict[ActionKind, str] = {
+    ActionKind.EXPEDITE_PO: "approved_actions",
+    ActionKind.SPLIT_SOURCE: "approved_actions",
+    ActionKind.RAISE_SAFETY_STOCK: "planning_parameters",
+    ActionKind.ALLOCATION_CONSTRAINT: "constraints",
+    # Quality-containment kinds (Meridian quality pivot) routed onto the same three tables.
+    ActionKind.QUALITY_HOLD: "approved_actions",
+    ActionKind.QUARANTINE_PO: "approved_actions",
+    ActionKind.TIGHTEN_INSPECTION: "planning_parameters",
+    ActionKind.SUPPLIER_QUALITY_HOLD: "constraints",
+}
+
+# Safety-stock slider ceiling/step for the RAISE_SAFETY_STOCK editor (floor is the SKU's current
+# on-hand from the operational rows, see `_safety_stock_floor`).
+_SAFETY_STOCK_QTY_MAX = 2000.0
+_SAFETY_STOCK_QTY_STEP = 10.0
+_SAFETY_STOCK_FLOOR = 0.0
 
 
 def _collect_citations(state: AgentState) -> list[str]:
@@ -110,6 +199,163 @@ def _collect_citations(state: AgentState) -> list[str]:
     if (or_ := state.get("operational_result")) and or_.sql:
         citations.append(f"operational-sql:{hash(or_.sql) % 10_000:04d}")
     return citations
+
+
+def _slug(value: str) -> str:
+    """Lowercase, hyphen-joined slug fragment for a stable per-action key."""
+    return re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+
+
+def _action_key(draft: _PlannedActionDraft, index: int) -> str:
+    """Stable per-action id: kind + the most specific identifier available (po/sku), else index."""
+    tail = draft.po_id or draft.sku or draft.supplier_id or draft.program or str(index)
+    return f"{_slug(draft.kind.value)}-{_slug(str(tail))}" if tail else _slug(draft.kind.value)
+
+
+def _safety_stock_floor(state: AgentState, sku: str | None) -> float:
+    """Slider floor for a RAISE_SAFETY_STOCK action: the SKU's current on-hand from the operational
+    rows (you should never raise safety stock below what's already on the shelf), else a sane 0."""
+    if (or_ := state.get("operational_result")) and or_.rows:
+        for r in or_.rows:
+            if (sku is None or r.sku == sku) and r.on_hand_qty is not None:
+                return float(r.on_hand_qty)
+    return _SAFETY_STOCK_FLOOR
+
+
+def _on_hand_qty(state: AgentState, sku: str | None) -> float | None:
+    """The SKU's current on-hand units from the operational rows, used as the default qty for a
+    QUALITY_HOLD when the LLM didn't propose one ("hold the N units we already have")."""
+    if (or_ := state.get("operational_result")) and or_.rows:
+        for r in or_.rows:
+            if (sku is None or r.sku == sku) and r.on_hand_qty is not None:
+                return float(r.on_hand_qty)
+    return None
+
+
+def _fact_from_string(raw: str) -> ActionFact:
+    """Turn a free-text fact string into an ActionFact. Split on the first ':' into k/v when the
+    LLM gives a labelled fact ("on-hand: 40 units"); otherwise label it generically as 'note'."""
+    text = (raw or "").strip()
+    if ":" in text:
+        k, v = text.split(":", 1)
+        return ActionFact(k=k.strip() or "note", v=v.strip())
+    return ActionFact(k="note", v=text)
+
+
+def _to_planned_actions(draft: _PlannerDraft, state: AgentState) -> list[PlannedAction]:
+    """PURE: map the LLM's `_PlannedActionDraft`s → durable `PlannedAction`s (key, target_table,
+    editability, slider bounds, evidence_refs, facts). No LLM/DB — unit-testable in isolation."""
+    evidence_refs = _collect_citations(state)
+    out: list[PlannedAction] = []
+    used_keys: set[str] = set()
+    for i, d in enumerate(draft.planned_actions):
+        target_table = _KIND_TO_TABLE[d.kind]
+        # Keys must be UNIQUE per action: two actions of the same kind+identifier (e.g. two
+        # allocation constraints on one SKU) would otherwise share a key and clobber each other on
+        # commit (write-back PKs are keyed by this), collapsing N actions into one row. Disambiguate
+        # a collision with the loop index so each action commits to its own row.
+        key = _action_key(d, i)
+        if key in used_keys:
+            key = f"{key}-{i}"
+        used_keys.add(key)
+        action = PlannedAction(
+            key=key,
+            kind=d.kind,
+            title=d.title,
+            detail=d.detail,
+            target_table=target_table,  # type: ignore[arg-type]
+            editable=True,
+            qty=d.qty,
+            cost_delta=d.cost_delta,
+            facts=[_fact_from_string(f) for f in d.facts],
+            evidence_refs=evidence_refs,
+            default_status="approve",
+            sku=d.sku,
+            supplier_id=d.supplier_id,
+            po_id=d.po_id,
+            program=d.program,
+        )
+        if d.kind == ActionKind.RAISE_SAFETY_STOCK:
+            action.qty_label = "Safety stock (units)"
+            action.qty_min = _safety_stock_floor(state, d.sku)
+            action.qty_max = _SAFETY_STOCK_QTY_MAX
+            action.qty_step = _SAFETY_STOCK_QTY_STEP
+        elif d.kind == ActionKind.QUALITY_HOLD:
+            # Hold the units we already have on the shelf; default to the SKU's on-hand qty.
+            action.qty = d.qty if d.qty is not None else _on_hand_qty(state, d.sku)
+            action.qty_label = "Units to hold"
+            action.qty_min = 0.0
+            action.qty_step = 10.0
+        elif d.kind == ActionKind.QUARANTINE_PO:
+            action.qty_label = "PO units"
+            action.qty_min = 0.0
+            action.qty_step = 50.0
+        elif d.kind == ActionKind.TIGHTEN_INSPECTION:
+            action.qty_label = "Inspection %"
+            action.qty_min = 0.0
+            action.qty_max = 100.0
+            action.qty_step = 5.0
+        elif d.kind == ActionKind.SUPPLIER_QUALITY_HOLD:
+            # A rule, not a quantity edit: rely on facts (scope=SKU, until="validated").
+            action.editable = False
+        elif d.qty is not None:
+            action.qty_label = "Units"
+        out.append(action)
+    return out
+
+
+# Keyword → ActionKind for the deterministic free-text fallback. Order matters: the first
+# matching (case-insensitive substring) keyword wins, so the more specific quality kinds are
+# checked before the generic "hold". A line with no match defaults to QUALITY_HOLD.
+_TEXT_KEYWORD_KINDS: list[tuple[tuple[str, ...], ActionKind]] = [
+    (("quarantine",), ActionKind.QUARANTINE_PO),
+    (("inspect",), ActionKind.TIGHTEN_INSPECTION),
+    (("split", "alternate", "dupont", "bridge"), ActionKind.SPLIT_SOURCE),
+    (("safety stock",), ActionKind.RAISE_SAFETY_STOCK),
+    (("expedite",), ActionKind.EXPEDITE_PO),
+    (("hold",), ActionKind.QUALITY_HOLD),
+]
+_DEFAULT_TEXT_KIND = ActionKind.QUALITY_HOLD
+
+
+def _kind_from_text(line: str) -> ActionKind:
+    """Map one free-text action line → an ActionKind via case-insensitive substring keywords."""
+    low = (line or "").lower()
+    for keywords, kind in _TEXT_KEYWORD_KINDS:
+        if any(kw in low for kw in keywords):
+            return kind
+    return _DEFAULT_TEXT_KIND
+
+
+def _planned_actions_from_text(actions: list[str], state: AgentState) -> list[PlannedAction]:
+    """PURE deterministic fallback: synthesize structured `PlannedAction`s from the free-text
+    `actions` lines so the Review page is NEVER empty when a recommendation has any actions.
+
+    Each line → one action: kind from a keyword map (else QUALITY_HOLD), title=detail=line,
+    qty=None, editable=False (a synthesized line carries no reviewable slider), unique key per
+    index, target_table from `_KIND_TO_TABLE`. Empty input → []. No LLM/DB."""
+    evidence_refs = _collect_citations(state)
+    out: list[PlannedAction] = []
+    for i, line in enumerate(actions or []):
+        text = (line or "").strip()
+        if not text:
+            continue
+        kind = _kind_from_text(text)
+        key = f"{_slug(kind.value)}-{i}"
+        out.append(
+            PlannedAction(
+                key=key,
+                kind=kind,
+                title=text,
+                detail=text,
+                target_table=_KIND_TO_TABLE[kind],  # type: ignore[arg-type]
+                editable=False,
+                qty=None,
+                evidence_refs=evidence_refs,
+                default_status="approve",
+            )
+        )
+    return out
 
 
 def _evidence_block(state: AgentState) -> str:
@@ -128,6 +374,46 @@ def _evidence_block(state: AgentState) -> str:
         lines = [f"  - [{p.source}] {(p.content or '')[:160]}" for p in kr.passages[:4]]
         parts.append("Knowledge passages:\n" + "\n".join(lines))
     return "\n\n".join(parts) if parts else "No gather results were returned."
+
+
+def _evidence_bundle(state: AgentState) -> dict:
+    """A COMPACT, JSON-able bundle of the evidence the recommendation rests on, for the UI's
+    evidence panel + the HITL interrupt payload (checkpointed, so caps mirror `_evidence_block`).
+    Three keys: operational/analytics `data`, knowledge `rag`, recalled `memory`."""
+    data: list[dict] = []
+    if (or_ := state.get("operational_result")) and or_.rows:
+        data += [
+            {
+                "source": "operational",
+                "supplier_id": r.supplier_id,
+                "sku": r.sku,
+                "summary": r.summary,
+                "similarity": r.similarity,
+                "on_hand_qty": r.on_hand_qty,
+                "open_po_qty": r.open_po_qty,
+            }
+            for r in or_.rows[:5]
+        ]
+    if (ar := state.get("analytics_result")) and ar.rows:
+        data += [{"source": "analytics", **{k: v for k, v in row.items()}} for row in ar.rows[:8]]
+
+    rag: list[dict] = []
+    if (kr := state.get("knowledge_result")) and kr.passages:
+        rag = [
+            {"source": p.source, "content": (p.content or "")[:200], "score": p.score}
+            for p in kr.passages[:4]
+        ]
+
+    # Objects (not bare strings) so the shape matches the frontend EvidenceBundle.memory type and
+    # the /api/state/tables `recalled_memory` shape — the UI reads `.text`/`.score`.
+    memory: list[dict] = []
+    ctx = state.get("memory_context")
+    if ctx and not ctx.is_empty:
+        for bucket in (ctx.prior_approvals, ctx.preferences, ctx.supplier_notes):
+            memory += [{"text": m.text, "score": m.score, "namespace": m.namespace} for m in bucket]
+        memory = memory[:6]
+
+    return {"data": data, "rag": rag, "memory": memory}
 
 
 def _memory_block(state: AgentState) -> str:
@@ -219,13 +505,39 @@ def _fallback_draft(state: AgentState, question: str) -> _PlannerDraft:
         counts.append(f"{len(kr.passages)} passages")
     if (ar := state.get("analytics_result")) and ar.rows:
         counts.append(f"{len(ar.rows)} analytics rows")
+    top_row = None
     if (or_ := state.get("operational_result")) and or_.rows:
         counts.append(f"{len(or_.rows)} operational matches")
+        top_row = or_.rows[0]
+
+    # Even offline (USE_STUBS / no LLM), yield ONE deterministic structured action grounded in the
+    # top operational row so the Meridian plan + write-back path stay exercisable end-to-end. The
+    # hero data is a quality-defect scenario (Henkel cracking), so contain it with a quality hold.
+    planned: list[_PlannedActionDraft] = []
+    if top_row is not None:
+        planned.append(
+            _PlannedActionDraft(
+                kind=ActionKind.QUALITY_HOLD,
+                title=f"Quality hold on {top_row.sku or 'the matched SKU'}",
+                detail=(
+                    f"Hold the on-hand {top_row.sku or 'matched SKU'} units from "
+                    f"{top_row.supplier_id or 'the supplier'} pending quality validation."
+                ),
+                qty=top_row.on_hand_qty,
+                sku=top_row.sku,
+                supplier_id=top_row.supplier_id,
+                facts=[
+                    f"on-hand: {top_row.on_hand_qty}",
+                    f"open PO: {top_row.open_po_qty}",
+                ],
+            )
+        )
     return _PlannerDraft(
         summary="Recommendation (deterministic compose) — " + (", ".join(counts) or "no gather results"),
         actions=["Review the matched operational cases and confirm scope before proceeding."],
         est_cost_usd=None,
         reasoning="LLM planner unavailable; composed from gather results.",
+        planned_actions=planned,
     )
 
 
@@ -248,14 +560,27 @@ def planner_node(state: AgentState) -> dict:
     )
     needs_approval = draft.is_action_bearing or over_threshold
 
+    # Deterministically map the LLM's action drafts → durable PlannedActions (keys, target tables,
+    # slider bounds, evidence_refs). RELIABLE FALLBACK: if the model returned only free-text
+    # `actions` (no structured plan), synthesize structured actions from the text so the Review
+    # page is never empty when a recommendation exists.
+    planned_actions = _to_planned_actions(draft, state) or _planned_actions_from_text(draft.actions, state)
+    # When a structured plan exists, the human-readable `actions` list mirrors its titles so chat
+    # render + eval keep working; else keep the string fallback.
+    if planned_actions:
+        actions = [a.title for a in planned_actions]
+    else:
+        actions = draft.actions or ["Confirm scope with the planner before proceeding."]
+
     rec = PlannerRecommendation(
         summary=draft.summary,
-        actions=draft.actions or ["Confirm scope with the planner before proceeding."],
+        actions=actions,
         needs_approval=needs_approval,
         is_action_bearing=draft.is_action_bearing,
         est_cost_usd=draft.est_cost_usd,
         reasoning=draft.reasoning,
         citations=_collect_citations(state),
+        planned_actions=planned_actions,
     )
 
     cost = f"${rec.est_cost_usd:,.0f}" if rec.est_cost_usd is not None else "unknown"
@@ -290,6 +615,11 @@ def hitl_review_node(state: AgentState) -> dict:
         {
             "type": "approval_request",
             "recommendation": rec.model_dump() if rec else None,
+            # The structured Meridian plan the human reviews per-action, plus a compact evidence
+            # bundle. Both are checkpointed at the interrupt boundary, so keep them small (the
+            # plan caps at ≤4 actions and `_evidence_bundle` caps rows/passages like _evidence_block).
+            "planned_actions": [a.model_dump() for a in rec.planned_actions] if rec else [],
+            "evidence": _evidence_bundle(state),
             "prompt": "Approve or reject this recommendation.",
         }
     )
@@ -304,6 +634,20 @@ def hitl_review_node(state: AgentState) -> dict:
     return {"hitl_decision": decision, "trace_notes": notes}
 
 
+def _coerce_action_decisions(raw) -> list[ActionDecision]:
+    """Coerce the resume dict's `action_decisions` (a list of dicts or ActionDecisions) → models."""
+    out: list[ActionDecision] = []
+    for item in raw or []:
+        if isinstance(item, ActionDecision):
+            out.append(item)
+        elif isinstance(item, dict) and item.get("key"):
+            try:
+                out.append(ActionDecision(**item))
+            except Exception:  # noqa: BLE001 — skip a malformed per-action entry, keep the rest
+                continue
+    return out
+
+
 def _coerce_decision(resume_value, user_id: str) -> HITLDecision:
     if isinstance(resume_value, HITLDecision):
         return resume_value
@@ -312,6 +656,8 @@ def _coerce_decision(resume_value, user_id: str) -> HITLDecision:
             verdict=HITLVerdict(resume_value.get("verdict", "approved")),
             note=resume_value.get("note"),
             user_id=resume_value.get("user_id") or user_id,
+            rationale=resume_value.get("rationale"),
+            action_decisions=_coerce_action_decisions(resume_value.get("action_decisions")),
         )
     # Fallback for a bare verdict string or unexpected shape.
     try:
@@ -333,11 +679,44 @@ async def commit_node(state: AgentState, config: RunnableConfig) -> dict:
     writes = build_memory_writes(state, decision, thread_id)
     counts = await write_memories(store, writes)
 
+    # Meridian write-back: an APPROVED action-bearing decision writes REAL structured rows to the
+    # Lakebase write-back tables (approved_actions / planning_parameters / constraints). Best-effort
+    # — a write failure logs + returns an error ledger but NEVER fails the run (commit must finalize).
+    rec = state.get("recommendation")
+    ledger: dict | None = None
+    approved = bool(decision and decision.verdict == HITLVerdict.APPROVED)
+    if approved and rec and rec.planned_actions:
+        from agent_server.operational_db import write_committed_actions
+
+        decisions_by_key = {d.key: d for d in decision.action_decisions}
+        user_id = state.get("user_id", "unknown")
+        try:
+            ledger = await asyncio.to_thread(
+                write_committed_actions,
+                thread_id,
+                user_id,
+                decision.rationale,
+                decisions_by_key,
+                rec.planned_actions,
+            )
+        except Exception as exc:  # noqa: BLE001 — never fail the run on a write-back error
+            logger.warning("Meridian write-back failed: %s", exc)
+            ledger = {"error": str(exc), "counts": {}, "rows": {}}
+
     verdict = decision.verdict.value if decision else "n/a"
     written = ", ".join(f"{k}={v}" for k, v in counts.items()) if counts else "skipped"
-    note = f"commit → finalized (verdict={verdict}, memory_writes={written})"
+    wb = ""
+    if ledger is not None:
+        wb = (
+            ", writeback=error" if ledger.get("error")
+            else ", writeback=" + ", ".join(f"{k}={v}" for k, v in (ledger.get("counts") or {}).items())
+        )
+    note = f"commit → finalized (verdict={verdict}, memory_writes={written}{wb})"
     notes = state.get("trace_notes", []) or []
     notes = [*notes, note]
     if w := _stream_writer():
         w({"kind": "trace", "note": note})
-    return {"trace_notes": notes}
+    out: dict = {"trace_notes": notes}
+    if ledger is not None:
+        out["commit_ledger"] = ledger
+    return out

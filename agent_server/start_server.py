@@ -10,6 +10,7 @@ and reuses them across requests (see `agent_server.lakebase`).
 """
 
 # ruff: noqa: E402
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -61,6 +62,18 @@ async def _lifespan(app):
             await checkpointer.setup()
             await store.setup()
             logger.info("Lakebase setup complete (%s)", LAKEBASE_CONFIG.description)
+
+            # Meridian write-back tables (approved_actions / planning_parameters / constraints) live
+            # in the operational schema and are owned by the app, not the LangGraph store — so ensure
+            # them here. The operational pool is sync, so run it off the event loop. Best-effort: a
+            # transient Lakebase blip locally must not block startup (the commit path also retries).
+            try:
+                from agent_server.operational_db import ensure_writeback_tables
+
+                await asyncio.to_thread(ensure_writeback_tables)
+                logger.info("Meridian write-back tables ensured")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not ensure Meridian write-back tables: %s", exc)
 
             app.state.checkpointer = checkpointer
             app.state.store = store

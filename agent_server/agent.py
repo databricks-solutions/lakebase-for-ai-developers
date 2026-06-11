@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 mlflow.langchain.autolog()
 logging.getLogger("mlflow.utils.autologging_utils").setLevel(logging.ERROR)
 
+# Resolved at startup by _setup_mlflow_experiment() — used to build trace deep-links (the
+# frontend has no MLFLOW_EXPERIMENT_ID; the experiment is resolved per-user at runtime).
+_EXPERIMENT_ID: str | None = None
+
 
 def _export_local_trace_credentials() -> None:
     """Local U2M wrinkle: MLflow's async trace exporter doesn't resolve OAuth-profile creds, so
@@ -73,6 +77,7 @@ def _setup_mlflow_experiment() -> None:
     reachable API path. When MLFLOW_TRACE_CATALOG/SCHEMA are set we bind the experiment to that
     UC location (+ a SQL warehouse for trace storage); otherwise fall back to plain experiment
     tracing (local dev / eval)."""
+    global _EXPERIMENT_ID
     try:
         trace_location = None
         cat = settings.mlflow_trace_catalog or settings.uc_catalog
@@ -106,7 +111,7 @@ def _setup_mlflow_experiment() -> None:
             if trace_location is not None:
                 try:
                     exp = mlflow.get_experiment(settings.mlflow_experiment_id)
-                    mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
+                    resolved = mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
                 except Exception as exc:  # e.g. app SP lacks USE CATALOG on the trace catalog
                     logger.warning(
                         "UC trace binding failed (%s); falling back to plain experiment tracing. "
@@ -114,9 +119,10 @@ def _setup_mlflow_experiment() -> None:
                         "%s.%s to enable UC traces.", exc, cat, cat, sch,
                     )
                     trace_location = None
-                    mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+                    resolved = mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
             else:
-                mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+                resolved = mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
+            _EXPERIMENT_ID = getattr(resolved, "experiment_id", None) or settings.mlflow_experiment_id
         elif mlflow.get_tracking_uri() == "databricks":
             from databricks.sdk import WorkspaceClient
 
@@ -124,15 +130,29 @@ def _setup_mlflow_experiment() -> None:
             # No explicit experiment → a dedicated per-user experiment (UC dest needs trace-free).
             name = f"/Users/{me}/supply-chain-planner-uc" if trace_location is not None else f"/Users/{me}/supply-chain-planner"
             if trace_location is not None:
-                mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
+                resolved = mlflow.set_experiment(experiment_name=name, trace_location=trace_location)
             else:
-                mlflow.set_experiment(name)
+                resolved = mlflow.set_experiment(name)
+            _EXPERIMENT_ID = getattr(resolved, "experiment_id", None) or settings.mlflow_experiment_id
         if trace_location is not None:
             logger.info("MLflow UC tracing → %s.%s (prefix=%s) on experiment %s",
                         cat, sch, settings.mlflow_trace_table_prefix,
                         settings.mlflow_experiment_id or f"/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
         logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
+
+
+def _trace_url(trace_id: str | None) -> str | None:
+    """Workspace deep-link to a trace: the experiment-scoped traces view with the trace
+    pre-selected. The bare /ml/traces/{id} path 404s."""
+    if not trace_id or not _EXPERIMENT_ID:
+        return None
+    from agent_server.obo import workspace_host  # lazy: avoid import cycle
+
+    host = workspace_host()
+    if not host:
+        return None
+    return f"{host.rstrip('/')}/ml/experiments/{_EXPERIMENT_ID}/traces?selectedEvaluationId={trace_id}"
 
 
 _export_local_trace_credentials()
@@ -185,7 +205,11 @@ def _latest_user_text(request: ResponsesAgentRequest) -> str:
 
 
 def _resume_command(request: ResponsesAgentRequest, user_id: str) -> Optional[Command]:
-    """If the request carries an HITL verdict, build a Command(resume=HITLDecision)."""
+    """If the request carries an HITL verdict, build a Command(resume=HITLDecision).
+
+    Also pulls the Meridian per-action review payload (`hitl_rationale` + `hitl_action_decisions`)
+    from custom_inputs so a resumed approval commits the human's per-action choices + rationale.
+    Bare verdict/note remain back-compatible."""
     ci = dict(request.custom_inputs or {})
     verdict = ci.get("hitl_verdict")
     if not verdict:
@@ -195,6 +219,8 @@ def _resume_command(request: ResponsesAgentRequest, user_id: str) -> Optional[Co
             verdict=HITLVerdict(verdict),
             note=ci.get("hitl_note"),
             user_id=user_id or "unknown",
+            rationale=ci.get("hitl_rationale"),
+            action_decisions=ci.get("hitl_action_decisions") or [],
         ).model_dump()
     )
 
@@ -214,14 +240,20 @@ def _render_recommendation(rec) -> str:
 
 
 def _custom_outputs(state: dict, interrupt_payload: Any | None) -> dict[str, Any]:
+    from agent_server.graph.planner import _evidence_bundle
+
     rec = state.get("recommendation")
     hitl = state.get("hitl_decision")
     rd = state.get("route_decision")
     out: dict[str, Any] = {
         "trace_notes": state.get("trace_notes", []),
         "route_decision": rd.model_dump() if rd else None,
+        # recommendation.model_dump() already carries planned_actions (the structured Meridian plan).
         "recommendation": rec.model_dump() if rec else None,
         "hitl_decision": hitl.model_dump() if hitl else None,
+        # The evidence the plan rests on + what the commit wrote (None until the run commits).
+        "evidence": _evidence_bundle(state),
+        "commit_ledger": state.get("commit_ledger"),
         "status": "awaiting_approval" if interrupt_payload is not None else "completed",
     }
     if interrupt_payload is not None:

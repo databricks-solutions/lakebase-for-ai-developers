@@ -17,11 +17,15 @@ export function ChatPanel({
   busy,
   onSend,
   onResume,
+  onGoToReview,
+  workspaceHost,
 }: {
   messages: ChatMessage[];
   busy: boolean;
   onSend: (text: string) => void;
   onResume: (verdict: "approved" | "rejected") => void;
+  onGoToReview: () => void;
+  workspaceHost?: string;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -46,7 +50,7 @@ export function ChatPanel({
           {empty ? (
             <Welcome onPick={(s) => onSend(s)} />
           ) : (
-            messages.map((m) => <Bubble key={m.id} m={m} onResume={onResume} busy={busy} />)
+            messages.map((m) => <Bubble key={m.id} m={m} onResume={onResume} onGoToReview={onGoToReview} busy={busy} workspaceHost={workspaceHost} />)
           )}
           <div ref={endRef} />
         </div>
@@ -97,7 +101,7 @@ function Welcome({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-function Bubble({ m, onResume, busy }: { m: ChatMessage; onResume: (v: "approved" | "rejected") => void; busy: boolean }) {
+function Bubble({ m, onResume, onGoToReview, busy, workspaceHost }: { m: ChatMessage; onResume: (v: "approved" | "rejected") => void; onGoToReview: () => void; busy: boolean; workspaceHost?: string }) {
   const isUser = m.role === "user";
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", animation: "fade-up var(--dur-base) var(--ease-out)" }}>
@@ -119,7 +123,7 @@ function Bubble({ m, onResume, busy }: { m: ChatMessage; onResume: (v: "approved
           : m.pending ? <Thinking steps={m.steps} />
           : m.text}
       </div>
-      {m.extras && !m.pending && <Extras extras={m.extras} onResume={onResume} busy={busy} />}
+      {m.extras && !m.pending && <Extras extras={m.extras} onResume={onResume} onGoToReview={onGoToReview} busy={busy} workspaceHost={workspaceHost} />}
     </div>
   );
 }
@@ -143,16 +147,19 @@ function Thinking({ steps }: { steps?: string[] }) {
   );
 }
 
-function Extras({ extras, onResume, busy }: { extras: NonNullable<ChatMessage["extras"]>; onResume: (v: "approved" | "rejected") => void; busy: boolean }) {
+function Extras({ extras, onResume, onGoToReview, busy, workspaceHost }: { extras: NonNullable<ChatMessage["extras"]>; onResume: (v: "approved" | "rejected") => void; onGoToReview: () => void; busy: boolean; workspaceHost?: string }) {
   const chips: string[] = [];
   if (extras.route) chips.push(`route: ${extras.route}`);
   if (extras.status) chips.push(extras.status);
   const appr = extras.approval_request;
-  const rec = extras.recommendation as { est_cost_usd?: number | null; needs_approval?: boolean } | undefined;
+  const rec = extras.recommendation;
   const cost =
     rec?.est_cost_usd != null
       ? `$${Number(rec.est_cost_usd).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : "—";
+  // The backend emits a ready-made, experiment-scoped trace deep-link (the bare /ml/traces/{id}
+  // path 404s, and the frontend has no experiment id to build the correct URL itself).
+  const traceUrl = extras.trace_url ?? null;
   return (
     <div style={{ marginTop: 8, maxWidth: "100%", display: "grid", gap: 8 }}>
       {chips.length > 0 && (
@@ -162,11 +169,11 @@ function Extras({ extras, onResume, busy }: { extras: NonNullable<ChatMessage["e
       )}
       {appr && (
         <div style={{ border: "1px solid var(--db-yellow-600)", background: "#fff8e8", borderRadius: "var(--radius-lg)", padding: "var(--space-4)" }}>
-          <div className="eyebrow" style={{ color: "var(--db-yellow-700)" }}>Approval requested</div>
-          <p style={{ margin: "6px 0", fontWeight: 500 }}>{appr.summary ?? "This action needs sign-off."}</p>
+          <div className="eyebrow" style={{ color: "var(--db-yellow-700)" }}>Plan ready for review</div>
+          <p style={{ margin: "6px 0", fontWeight: 500 }}>{rec?.summary ?? appr.summary ?? "This plan needs your sign-off."}</p>
           {appr.est_cost_usd != null && <p style={{ color: "var(--fg-2)", fontSize: "var(--fs-body-sm)" }}>Est. cost: ${Number(appr.est_cost_usd).toLocaleString()}</p>}
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button disabled={busy} onClick={() => onResume("approved")} style={{ ...sendBtn(busy), background: busy ? "var(--db-navy-300)" : "var(--db-green-600)" }}>Approve</button>
+            <button disabled={busy} onClick={onGoToReview} style={{ ...sendBtn(busy), background: busy ? "var(--db-navy-300)" : "var(--db-navy-800)" }}>Review &amp; decide →</button>
             <button disabled={busy} onClick={() => onResume("rejected")} style={{ ...peekBtn, opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" }}>Reject</button>
           </div>
         </div>
@@ -190,7 +197,16 @@ function Extras({ extras, onResume, busy }: { extras: NonNullable<ChatMessage["e
           Estimated cost: {cost} · {rec.needs_approval ? "Approval required" : "No approval needed"}
         </div>
       )}
-      {extras.trace_id && <FeedbackButtons traceId={extras.trace_id} />}
+      {extras.trace_id && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <FeedbackButtons traceId={extras.trace_id} />
+          {traceUrl && (
+            <a href={traceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+              Open in MLflow ↗
+            </a>
+          )}
+        </div>
+      )}
     </div>
   );
 }

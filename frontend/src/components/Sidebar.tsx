@@ -31,7 +31,7 @@ export function Sidebar({
       }}
     >
       <div style={{ padding: "var(--space-5) var(--space-4)" }}>
-        <div className="eyebrow" style={{ color: "var(--db-lava-400)" }}>Databricks · Lakebase</div>
+        <div className="eyebrow" style={{ color: "var(--db-lava-400)" }}>Meridian SC · Planner</div>
         <div style={{ fontSize: "var(--fs-h4)", fontWeight: 500, marginTop: 4, lineHeight: 1.2 }}>
           Supply-Chain<br />Planner Copilot
         </div>

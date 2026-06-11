@@ -53,5 +53,10 @@ class AgentState(TypedDict, total=False):
     # ── HITL ─────────────────────────────────────────────────────────────────────────────
     hitl_decision: HITLDecision
 
+    # ── Commit (Meridian write-back; no reducer) ─────────────────────────────────────────
+    # commit_node stashes what got written to the Lakebase write-back tables (per-table row
+    # counts + the staged rows) for the done payload + the UI's Lakebase tab.
+    commit_ledger: dict
+
     # ── Audit / trace ────────────────────────────────────────────────────────────────────
     trace_notes: list[str]  # human-readable breadcrumbs (planner reasoning, route reason)

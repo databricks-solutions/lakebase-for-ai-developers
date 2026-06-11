@@ -47,9 +47,16 @@ def _scorers():
         instructions=(
             "You are judging a supply-chain copilot's recommendation.\n"
             "Question: {{ inputs }}\n"
-            "Agent output (includes `summary`, `actions`, and the `evidence` it gathered): {{ outputs }}\n\n"
-            "Is the recommendation grounded in the provided evidence (no invented suppliers/SKUs/numbers) "
-            "AND actionable (concrete steps a planner can execute)? Answer 'yes' or 'no'."
+            "Agent output (includes `summary`, `actions`, the structured `planned_actions` plan, and "
+            "the `evidence` it gathered): {{ outputs }}\n\n"
+            "Judge GROUNDING: is the output grounded in the provided evidence — no invented "
+            "suppliers/SKUs/numbers, and if `planned_actions` are present they reference suppliers/SKUs/"
+            "POs that appear in the evidence?\n"
+            "Then judge FITNESS for the question type: questions that ask for a recommendation or "
+            "mitigation should propose concrete, executable steps; purely informational questions "
+            "(counts, totals, lookups, status rollups) need only report grounded findings and must NOT "
+            "be penalized for lacking action steps.\n"
+            "Answer 'yes' if the output is grounded AND fit for the question type; otherwise 'no'."
         ),
         model="databricks",
     )
