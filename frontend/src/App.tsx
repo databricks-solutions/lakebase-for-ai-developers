@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
-import { getMe, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
+import { deleteSession, getMe, getSessionMessages, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
 import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
@@ -10,6 +10,11 @@ import type { ChatMessage, Me, Session } from "./types";
 
 const newThreadId = () =>
   (crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+
+// Persisted-transcript shape: only the rendered content (drop transient `steps`/`pending`).
+const slim = (x: ChatMessage): ChatMessage => ({ id: x.id, role: x.role, text: x.text, extras: x.extras });
+// Chat name inferred from the conversation = the first user message, condensed.
+const inferTitle = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 60) || "New conversation";
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -32,7 +37,8 @@ export default function App() {
       const userMsg: ChatMessage = { id: newThreadId(), role: "user", text };
       const pendingId = newThreadId();
       const pending: ChatMessage = { id: pendingId, role: "assistant", text: "", pending: true, steps: [] };
-      const isFirst = (byThread[thread] ?? []).length === 0;
+      const prior = byThread[thread] ?? [];
+      const isFirst = prior.length === 0;
       const patch = (fn: (x: ChatMessage) => ChatMessage) =>
         setByThread((m) => ({ ...m, [thread]: (m[thread] ?? []).map((x) => (x.id === pendingId ? fn(x) : x)) }));
 
@@ -50,10 +56,16 @@ export default function App() {
         onTrace: (note) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), note] })),
         onDone: (reply, extras) => {
           patch((x) => ({ ...x, text: reply, extras, pending: false }));
+          const transcript: ChatMessage[] = [
+            ...prior.map(slim),
+            { id: userMsg.id, role: "user", text },
+            { id: pendingId, role: "assistant", text: reply, extras },
+          ];
           upsertSession(thread, {
-            title: isFirst ? text.slice(0, 80) : undefined,
+            title: isFirst ? inferTitle(text) : undefined,  // set once; backend preserves it
             preview: reply.slice(0, 160),
             updated_at: new Date().toISOString(),
+            messages: transcript,
           }).catch(() => {});
           refreshSessions();
         },
@@ -62,6 +74,33 @@ export default function App() {
       setBusy(false);
     },
     [thread, byThread, refreshSessions]
+  );
+
+  // Open a conversation. For a historical chat not in memory this session, rehydrate its
+  // transcript from the store so it's no longer a dead/empty panel.
+  const onOpen = useCallback(
+    async (t: string) => {
+      setThread(t);
+      if ((byThread[t] ?? []).length > 0) return;
+      try {
+        const { messages } = await getSessionMessages(t);
+        if (messages?.length) setByThread((m) => ({ ...m, [t]: messages }));
+      } catch { /* leave empty — a brand-new or transcript-less thread */ }
+    },
+    [byThread]
+  );
+
+  // Soft-delete a conversation: hide it immediately (optimistic), then flag it server-side
+  // (deleted_by_user — the data is retained). If it's the open one, start a fresh thread.
+  const onDelete = useCallback(
+    async (t: string) => {
+      setSessions((prev) => prev.filter((s) => s.thread_id !== t));
+      setByThread((m) => { const { [t]: _drop, ...rest } = m; return rest; });
+      if (t === thread) setThread(newThreadId());
+      try { await deleteSession(t); } catch { /* server best-effort */ }
+      refreshSessions();
+    },
+    [thread, refreshSessions]
   );
 
   // HITL: approve/reject the awaiting-approval message in the current thread → resume the run.
@@ -84,7 +123,12 @@ export default function App() {
         }),
         onSubstep: (_node, label) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), label] })),
         onTrace: (note) => patch((x) => ({ ...x, steps: [...(x.steps ?? []), note] })),
-        onDone: (reply, extras) => { patch((x) => ({ ...x, text: reply, extras, pending: false })); refreshSessions(); },
+        onDone: (reply, extras) => {
+          patch((x) => ({ ...x, text: reply, extras, pending: false }));
+          const transcript = msgs.map((x) => (x.id === target.id ? { ...slim(x), text: reply, extras } : slim(x)));
+          upsertSession(thread, { preview: reply.slice(0, 160), updated_at: new Date().toISOString(), messages: transcript }).catch(() => {});
+          refreshSessions();
+        },
         onError: (msg) => patch((x) => ({ ...x, text: `Error: ${msg}`, pending: false, error: true })),
       });
       setBusy(false);
@@ -101,7 +145,8 @@ export default function App() {
           sessions={sessions}
           currentThread={thread}
           onNew={() => setThread(newThreadId())}
-          onOpen={(t) => setThread(t)}
+          onOpen={onOpen}
+          onDelete={onDelete}
         />
         <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "var(--space-3) var(--space-5)", borderBottom: "1px solid var(--border)" }}>

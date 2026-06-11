@@ -91,15 +91,24 @@ def _ensure_index(w: WorkspaceClient, endpoint: str, index: str, source: str) ->
     )
 
 
-def _wait_until_online(w: WorkspaceClient, index: str) -> None:
+def _wait_until_online(w: WorkspaceClient, index: str, timeout_s: int = 1800) -> None:
     print("\n  waiting for index to come online…")
-    while True:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
         idx = w.vector_search_indexes.get_index(index_name=index)
-        state = getattr(getattr(idx, "status", None), "detailed_state", None)
-        print(f"    index state: {state}")
-        if state and "ONLINE" in str(state):
+        status = getattr(idx, "status", None)
+        # `detailed_state` is None for some SDK/index versions; `ready` (bool) is the reliable
+        # signal, and a positive indexed_row_count means the sync has populated the index.
+        state = getattr(status, "detailed_state", None)
+        ready = getattr(status, "ready", None)
+        rows = getattr(status, "indexed_row_count", None)
+        print(f"    index state: {state}  ready: {ready}  rows: {rows}")
+        if ready or (state and "ONLINE" in str(state)) or (rows and rows > 0):
             return
+        if state and ("FAILED" in str(state) or "OFFLINE" in str(state)):
+            raise SystemExit(f"Index entered terminal failure state: {state}")
         time.sleep(30)
+    raise SystemExit(f"Index not online within {timeout_s}s: {index}")
 
 
 def main() -> None:

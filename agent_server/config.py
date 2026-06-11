@@ -11,6 +11,7 @@ the whole team can run against their own catalog/schema/endpoints by editing `.e
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -58,6 +59,14 @@ class Settings(BaseModel):
     # --- Analytics agent (Genie) ---
     genie_space_id: str = Field(default="", alias="GENIE_SPACE_ID")
     warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
+
+    @field_validator("genie_space_id")
+    @classmethod
+    def _normalize_genie_space_id(cls, v: str) -> str:
+        # The DABs bundle defaults GENIE_SPACE_ID to a non-empty sentinel ("unset") because Apps
+        # rejects env entries with no value and DABs drops empty strings. Treat the sentinel (and
+        # any blank) as unset so the Analytics route degrades gracefully (genie_tool checks falsy).
+        return "" if (v or "").strip().lower() in ("", "unset", "none") else v
 
     # --- Demo (operational data) ---
     # In-scope planner identity for the user_access ACL. Unset → the current Databricks user
@@ -159,6 +168,13 @@ class Settings(BaseModel):
         default=None, alias="MLFLOW_TRACING_SQL_WAREHOUSE_ID"
     )
 
+    @field_validator("mlflow_tracing_warehouse_id")
+    @classmethod
+    def _normalize_warehouse(cls, v: str | None) -> str | None:
+        # The bundle defaults this to the "unset" sentinel (DABs drops empty env values, which Apps
+        # rejects). Treat the sentinel / blank as "no warehouse" → UC tracing stays off.
+        return None if (v or "").strip().lower() in ("", "unset", "none") else v
+
     # --- Derived helpers ---
     @property
     def seed_data_dir(self) -> Path:
@@ -184,15 +200,50 @@ class Settings(BaseModel):
         return _on_databricks()
 
 
+def _job_param_overrides() -> dict[str, str]:
+    """Config the setup_and_seed DABs job passes to its tasks. Serverless job tasks can't take
+    environment variables, so the bundle passes catalog/Lakebase/etc. coordinates as task
+    parameters instead: Python tasks as `ALIAS=value` argv pairs, notebook tasks as job widgets
+    of the same names. This is the ONLY way the seed scripts (which read config solely through
+    this module) learn which catalog/Lakebase to target.
+
+    Best-effort and additive: results are merged UNDER real env (env wins), so the App — which
+    sets every value as an env var — never sees these. Any failure yields no overrides.
+    """
+    aliases = {f.alias for f in Settings.model_fields.values() if f.alias}
+    out: dict[str, str] = {}
+    # (a) Python tasks: `ALIAS=value` argv pairs (spark_python_task `parameters`).
+    for arg in sys.argv[1:]:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            if k in aliases and v:
+                out[k] = v
+    # (b) Notebook tasks: job widgets named by alias (notebook_task `base_parameters`).
+    try:
+        from databricks.sdk.runtime import dbutils  # present only on Databricks
+        for k in aliases:
+            try:
+                v = dbutils.widgets.get(k)
+                if v:
+                    out[k] = v
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     _load_dotenv_if_local()
     # Build kwargs from env, preferring alias names (matches .env.example).
-    return Settings.model_validate(
-        {field.alias or name: os.environ[field.alias or name]
-         for name, field in Settings.model_fields.items()
-         if (field.alias or name) in os.environ}
-    )
+    merged = {field.alias or name: os.environ[field.alias or name]
+              for name, field in Settings.model_fields.items()
+              if (field.alias or name) in os.environ}
+    # Fill any gaps from setup_and_seed job parameters (env always wins → no effect in the App).
+    for k, v in _job_param_overrides().items():
+        merged.setdefault(k, v)
+    return Settings.model_validate(merged)
 
 
 # Module-level shortcut. Callers do: `from agent_server.config import settings`.

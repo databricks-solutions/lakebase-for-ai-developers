@@ -9,8 +9,13 @@ set -euo pipefail
 
 PROFILE="${PROFILE:-mfg-sc-agent}"
 APP_NAME="${APP_NAME:-supply-chain-planner}"
-BRANCH="projects/mfg-supply-chain-copilot/branches/production"
-EP="$BRANCH/endpoints/primary"
+# Lakebase coordinates — override to match your bundle vars, e.g. if you renamed the project:
+#   LAKEBASE_PROJECT=mfg-supply-chain-copilot-test ./scripts/grant_app_sp.sh
+LAKEBASE_PROJECT="${LAKEBASE_PROJECT:-mfg-supply-chain-copilot}"
+LAKEBASE_BRANCH="${LAKEBASE_BRANCH:-production}"
+LAKEBASE_ENDPOINT="${LAKEBASE_ENDPOINT:-primary}"
+BRANCH="projects/${LAKEBASE_PROJECT}/branches/${LAKEBASE_BRANCH}"
+EP="$BRANCH/endpoints/${LAKEBASE_ENDPOINT}"
 SCHEMA="public"
 MEM_SCHEMA="supply_chain_planner_memory_app"
 SCOPE="${SCOPE:-adhesives}"   # the hero cluster's access scope
@@ -28,7 +33,11 @@ databricks postgres create-role "$BRANCH" --json "{\"role\":{\"name\":\"$SP\"}}"
   && echo "registered SP as a Postgres role" || echo "create-role skipped (likely already exists / UI needed)"
 
 # 2) Connect as you (superuser) and grant.
-HOST="$(databricks postgres get-endpoint "$EP" -p "$PROFILE" -o json | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"]["hosts"]["host"])')"
+EP_JSON="$(databricks postgres get-endpoint "$EP" -p "$PROFILE" -o json 2>&1)"
+HOST="$(printf '%s' "$EP_JSON" | python3 -c 'import sys,json;
+try: print(json.load(sys.stdin)["status"]["hosts"]["host"])
+except Exception: pass')"
+[ -n "$HOST" ] || { echo "ERROR: could not resolve Lakebase endpoint '$EP'."; echo "  Set LAKEBASE_PROJECT to match your bundle (you used lakebase_project=... in make deploy):"; echo "    LAKEBASE_PROJECT=<your-project> PROFILE=$PROFILE ./scripts/grant_app_sp.sh"; echo "  (get-endpoint said: $EP_JSON)"; exit 1; }
 export PGPASSWORD="$(databricks postgres generate-database-credential --json "{\"endpoint\":\"$EP\"}" -p "$PROFILE" -o json | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
 
 TESTER_INSERTS=""
