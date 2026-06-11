@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { getMe, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
+import { deleteSession, getMe, getSessionMessages, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
 import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
@@ -36,6 +36,11 @@ function streamHandlers(
     onError: (msg: string) => patch((x) => ({ ...x, text: `Error: ${msg}`, pending: false, error: true })),
   };
 }
+
+// Persisted-transcript shape: only the rendered content (drop transient `steps`/`pending`).
+const slim = (x: ChatMessage): ChatMessage => ({ id: x.id, role: x.role, text: x.text, extras: x.extras });
+// Chat name inferred from the conversation = the first user message, condensed.
+const inferTitle = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 60) || "New conversation";
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -85,7 +90,8 @@ export default function App() {
       const userMsg: ChatMessage = { id: newThreadId(), role: "user", text };
       const pendingId = newThreadId();
       const pending: ChatMessage = { id: pendingId, role: "assistant", text: "", pending: true, steps: [] };
-      const isFirst = (byThread[thread] ?? []).length === 0;
+      const prior = byThread[thread] ?? [];
+      const isFirst = prior.length === 0;
       const patch = (fn: (x: ChatMessage) => ChatMessage) =>
         setByThread((m) => ({ ...m, [thread]: (m[thread] ?? []).map((x) => (x.id === pendingId ? fn(x) : x)) }));
 
@@ -97,10 +103,16 @@ export default function App() {
         thread,
         streamHandlers(patch, (reply, extras) => {
           patch((x) => ({ ...x, text: reply, extras, pending: false }));
+          const transcript: ChatMessage[] = [
+            ...prior.map(slim),
+            { id: userMsg.id, role: "user", text },
+            { id: pendingId, role: "assistant", text: reply, extras },
+          ];
           upsertSession(thread, {
-            title: isFirst ? text.slice(0, 80) : undefined,
+            title: isFirst ? inferTitle(text) : undefined,  // set once; backend preserves it
             preview: reply.slice(0, 160),
             updated_at: new Date().toISOString(),
+            messages: transcript,
           }).catch(() => {});
           refreshSessions();
         }),
@@ -109,6 +121,19 @@ export default function App() {
       if (turnRef.current === ac) setBusy(false); // ignore if a newer turn took over
     },
     [thread, byThread, refreshSessions, startTurn]
+  );
+
+  // Soft-delete a conversation: hide it immediately (optimistic), then flag it server-side
+  // (deleted_by_user — the data is retained). If it's the open one, start a fresh thread.
+  const onDelete = useCallback(
+    async (t: string) => {
+      setSessions((prev) => prev.filter((s) => s.thread_id !== t));
+      setByThread((m) => { const { [t]: _drop, ...rest } = m; return rest; });
+      if (t === thread) setThread(newThreadId());
+      try { await deleteSession(t); } catch { /* server best-effort */ }
+      refreshSessions();
+    },
+    [thread, refreshSessions]
   );
 
   // HITL: resume the awaiting-approval message with per-action decisions. Single source of truth —
@@ -135,6 +160,9 @@ export default function App() {
         decisions,
         streamHandlers(patch, (reply, extras) => {
           patch((x) => ({ ...x, text: reply, extras, pending: false }));
+          // Persist the resumed transcript so the chat is rehydratable later (folds in #21's history).
+          const transcript = msgs.map((x) => (x.id === target.id ? { ...slim(x), text: reply, extras } : slim(x)));
+          upsertSession(thread, { preview: reply.slice(0, 160), updated_at: new Date().toISOString(), messages: transcript }).catch(() => {});
           refreshSessions();
           // Mark commit so Review shows the success state and Lakebase re-fetches.
           if (decisions.verdict === "approved") setCommittedAt(Date.now());
@@ -154,11 +182,21 @@ export default function App() {
     [onResumeStructured]
   );
 
-  const openThread = useCallback((t: string) => {
-    setThread(t);
-    setCommittedAt(0);
-    setPage("chat");
-  }, []);
+  const openThread = useCallback(
+    async (t: string) => {
+      setThread(t);
+      setCommittedAt(0);
+      setPage("chat");
+      // Rehydrate a historical chat's transcript from the store if it's not in memory this session
+      // (folds in #21's reopen fix — otherwise a past chat opens to a dead/empty panel).
+      if ((byThread[t] ?? []).length > 0) return;
+      try {
+        const { messages } = await getSessionMessages(t);
+        if (messages?.length) setByThread((m) => ({ ...m, [t]: messages }));
+      } catch { /* leave empty — a brand-new or transcript-less thread */ }
+    },
+    [byThread]
+  );
   const newThread = useCallback(() => {
     setThread(newThreadId());
     setCommittedAt(0);
@@ -175,6 +213,7 @@ export default function App() {
           currentThread={thread}
           onNew={newThread}
           onOpen={openThread}
+          onDelete={onDelete}
         />
         <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
           <div style={topBar}>

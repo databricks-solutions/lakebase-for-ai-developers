@@ -1,140 +1,340 @@
-# Databricks Asset Bundle (DABs) for the Supply-Chain Planner Copilot.
+# Databricks Asset Bundle (DABs) — Supply-Chain Planner Copilot.
 #
-# Shape mirrors the reference template's bundle:
-#   https://github.com/databricks/app-templates/blob/main/agent-langgraph-advanced/databricks.yml
+# ONE-SHOT DEPLOY. A field SA points a CLI profile at their own workspace, sets a couple of
+# variables (catalog + Lakebase project), and gets the whole demo: the App (LangGraph agent +
+# chat UI served at /ui), a fresh MLflow experiment for tracing, and a setup-and-seed job that
+# loads the demo dataset (operational tables + pgvector + Genie + Knowledge/Vector-Search).
 #
-# Carve-out: the Genie space is NOT a clean DABs resource — it is created manually
-# (data/genie/02_create_genie_space.py) and referenced by id via GENIE_SPACE_ID.
+#   # 0. one-time prereqs (see docs/DEPLOY.md): a Lakebase autoscaling project + a catalog you
+#   #    can write to. The deployer should be a workspace admin.
+#   # 1. build the SPA + deploy the bundle + (optionally) seed demo data — all in one wrapper:
+#   make deploy PROFILE=<your-cli-profile>                 # demo data on by default
+#   make deploy PROFILE=<your-cli-profile> SEED=false      # bring your own data (skip seeding)
 #
-# Deploy (always pass the workspace profile):
-#   databricks bundle validate --profile mfg-sc-agent
-#   databricks bundle deploy   --profile mfg-sc-agent -t dev
-#   databricks bundle run supply_chain_planner --profile mfg-sc-agent
+# Equivalent raw commands:
+#   npm --prefix frontend ci && npm --prefix frontend run build
+#   databricks bundle deploy -t dev --profile <p>
+#   databricks bundle run setup_and_seed -t dev --profile <p>   # only if seeding demo data
+#
+# DATA TOGGLE: start on the bundled demo samples (run the seed job). Later, point `uc_catalog` /
+# `uc_schema` at your own governed tables and DON'T run the seed job — the app reads whatever the
+# variables point at. Genie space is a carve-out (not a clean DABs resource): the seed job creates
+# one and prints its id; set `genie_space_id` and redeploy to wire the Analytics agent.
 
 bundle:
   name: supply_chain_planner
 
+# The built SPA lives in frontend/dist (git-ignored). Force-include it so `bundle deploy` ships it
+# to the App even though .gitignore would otherwise exclude it. Build it first (the Makefile does).
+# Exclude the static app.yaml: under DABs the App config (command + env, below) is authoritative
+# and variable-driven — a synced app.yaml with hardcoded values would shadow it at runtime. The
+# legacy `databricks apps deploy` path (scripts/deploy_app_yau46e.sh) still uses app.yaml directly.
+sync:
+  include:
+    - frontend/dist/**
+  exclude:
+    - app.yaml
+
 variables:
-  # Lakebase autoscaling coordinates. Dev/prod are isolated by BRANCH (copy-on-write) within the
-  # one workspace — the idiomatic Lakebase pattern. `demo` uses `production`; `dev` overrides to
-  # `development` (see targets below). Both halves of state — agent memory AND the operational
-  # synced-table clones — live on whichever branch the app connects to.
+  # --- Unity Catalog: the Genie/operational Delta source + the Knowledge volume & VS index. ---
+  uc_catalog:
+    description: Catalog holding the operational Delta tables, Knowledge volume, VS index, and trace schema. Must already exist and be writable by the deployer.
+    default: main
+  uc_schema:
+    description: Schema (within uc_catalog) for the operational Delta tables + Knowledge corpus.
+    default: supply_chain_planner
+
+  # --- Lakebase autoscaling (the agent's durable state + operational hybrid query). ---
+  # Assumed to already exist (see docs/DEPLOY.md). The App mints OAuth DB creds from these coords.
+  lakebase_project:
+    description: Lakebase autoscaling project id (e.g. mfg-supply-chain-copilot).
+    default: mfg-supply-chain-copilot
   lakebase_branch:
-    description: Lakebase branch RESOURCE PATH the App's postgres resource binds to.
-    default: projects/mfg-supply-chain-copilot/branches/production
-  lakebase_branch_name:
-    description: Lakebase branch SHORT NAME passed to the app env (LAKEBASE_AUTOSCALING_BRANCH).
+    description: Lakebase branch.
     default: production
+  lakebase_endpoint:
+    description: Lakebase endpoint name on the branch.
+    default: primary
   lakebase_database:
-    description: Lakebase Postgres database name.
+    description: Lakebase Postgres database.
     default: databricks_postgres
+  # NOTE: the operational synced tables live in uc_catalog (schema `public`), NOT a separate
+  # Lakebase-registered catalog — the synced-table spec carries its own branch + postgres_database,
+  # so a plain writable catalog works and the bundle creates the `public` schema in it. One catalog
+  # var to set (uc_catalog); LAKEBASE_UC_CATALOG below follows it.
+
+  # --- Analytics (Genie) — carve-out: created by the seed job, then set here + redeploy. ---
   genie_space_id:
-    description: Manually-created Genie space id (carve-out — not a DABs resource).
-    default: "01f16128125d1d11897c8267c4e27be2"
+    # Sentinel default, NOT empty: DABs drops empty-string env values, and Apps then rejects the
+    # name-only entry ("Must specify environment variable source"). config.py treats "unset" as
+    # no-Genie (the Analytics route degrades gracefully). Set the real id after the seed creates the
+    # space, then redeploy — a real id overrides the sentinel.
+    description: Genie space id. Defaults to the "unset" sentinel; set the real id after the seed job creates the space.
+    default: "unset"
+
+  # --- Knowledge (Mosaic AI Vector Search). ---
+  vector_search_endpoint:
+    description: Vector Search endpoint name (created by the seed job's build_vs_index task).
+    default: supply-chain-planner-vs
+  embedding_endpoint:
+    description: Databricks embedding endpoint for the store + VS index.
+    default: databricks-gte-large-en
+
+  # --- Inference. Two LLM callsites: a fast router (classifier) + the planner (synthesis). The
+  # gather/retrieval agents use Vector Search / Genie / Lakebase, not an LLM endpoint. ---
+  llm_router_endpoint:
+    description: Fast model for the supervisor/router (a constrained classifier — small is plenty).
+    default: databricks-claude-haiku-4-5
+  llm_endpoint:
+    description: Foundation Model endpoint for the planner (complex synthesis).
+    default: databricks-claude-opus-4-8
+
+  # --- MLflow 3 Unity-Catalog tracing (telemetry written by the App service principal). ---
+  mlflow_trace_schema:
+    description: Schema (within uc_catalog) where MLflow writes UC-backed traces. Created by the bootstrap_schemas task.
+    default: mlflow_traces
+  mlflow_trace_prefix:
+    description: Table-name prefix for the UC trace tables.
+    default: scp
+  # SQL warehouse that backs UC trace storage. REQUIRED for traces (and 👍/👎 feedback) to record on
+  # Databricks Apps — without it, tracing stays off. Defaults to the "unset" sentinel (NOT empty:
+  # DABs drops empty env values and Apps rejects the name-only entry); config treats "unset" as off.
+  sql_warehouse_id:
+    description: SQL warehouse id for MLflow UC tracing. Set a real id to enable traces; "unset" = tracing off.
+    default: "unset"
+
+  log_level:
+    description: App log level.
+    default: INFO
 
 resources:
+  # Bundle-managed MLflow experiment — DABs creates a FRESH one per deploy, owned by the deployer.
+  # Fresh matters: MLflow's UC trace destination only binds to a trace-free experiment. The App
+  # binds to it by id (env MLFLOW_EXPERIMENT_ID, value_from "experiment"), and the experiment
+  # app-resource below grants the App's service principal CAN_MANAGE so it can write traces.
+  experiments:
+    planner_experiment:
+      name: /Users/${workspace.current_user.userName}/${bundle.name}-${bundle.target}-traces
+
   apps:
     supply_chain_planner:
       name: "supply-chain-planner"
-      description: "Multi-agent supply-chain planner copilot — LangGraph on Apps, Lakebase state, MLflow tracing"
+      description: "Multi-agent supply-chain planner copilot — LangGraph on Apps, Lakebase state, OBO, MLflow tracing, chat UI at /ui"
       source_code_path: ./
+
+      # OBO (on-behalf-of-user): the App requests these user scopes so Knowledge (Vector Search),
+      # Analytics (Genie), and UC reads run as the signed-in planner — least privilege, no broad
+      # grants on the App service principal for data access. (Tracing is App-SP telemetry, granted
+      # via the experiment resource below.)
+      user_api_scopes:
+        - sql
+        - vectorsearch.vector-search-indexes
+        - dashboards.genie
+        - serving.serving-endpoints
+        - catalog.tables:read
+        - catalog.schemas:read
+        - catalog.catalogs:read
+
       config:
-        # P0: start-server runs the agent server (FastAPI + run/poll/resume + chat proxy).
-        # Slice 4 repoints start-app at a launcher that also boots the Next.js frontend.
         command: ["uv", "run", "start-server"]
         env:
+          # --- MLflow tracing ---
           - name: MLFLOW_TRACKING_URI
             value: "databricks"
           - name: MLFLOW_REGISTRY_URI
             value: "databricks-uc"
           - name: MLFLOW_EXPERIMENT_ID
             value_from: "experiment"
-          # Lakebase: the `postgres` resource resolves to the autoscaling endpoint name.
-          - name: LAKEBASE_AUTOSCALING_ENDPOINT
-            value_from: "postgres"
+          - name: MLFLOW_TRACE_CATALOG
+            value: ${var.uc_catalog}
+          - name: MLFLOW_TRACE_SCHEMA
+            value: ${var.mlflow_trace_schema}
+          - name: MLFLOW_TRACE_TABLE_PREFIX
+            value: ${var.mlflow_trace_prefix}
+          - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
+            value: ${var.sql_warehouse_id}   # "unset" sentinel (non-empty) → config treats as off
+
+          # --- Lakebase (autoscaling) — app SP mints OAuth DB creds from these coords ---
           - name: LAKEBASE_AUTOSCALING_PROJECT
-            value: "mfg-supply-chain-copilot"
-          # Branch is the dev/prod isolation boundary — overridden per target (dev → development).
+            value: ${var.lakebase_project}
           - name: LAKEBASE_AUTOSCALING_BRANCH
-            value: ${var.lakebase_branch_name}
+            value: ${var.lakebase_branch}
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value: ${var.lakebase_endpoint}
           - name: LAKEBASE_DATABASE
-            value: "databricks_postgres"
-          # Same schema NAME in every environment — isolation comes from the branch, not the name.
-          # Owned by the App service principal on each branch. Deploy-first: the SP must create
-          # this schema (store.setup) before any local run uses that branch, or it stays user-owned
-          # and the SP can't write. See data/operational/README.md → "Agent memory: dev vs prod".
+            value: ${var.lakebase_database}
           - name: LAKEBASE_AGENT_MEMORY_SCHEMA
-            value: "supply_chain_planner_memory"
+            value: "supply_chain_planner_memory_app"
           - name: LAKEBASE_OPERATIONAL_SCHEMA
             value: "public"
-          - name: DATABRICKS_EMBEDDING_ENDPOINT
-            value: "databricks-gte-large-en"
-          # Analytics agent (Genie) + operational catalog/schema.
-          - name: GENIE_SPACE_ID
-            value: "01f16128125d1d11897c8267c4e27be2"
-          - name: UC_CATALOG
-            value: "serverless_stable_yau46e_catalog"
-          - name: UC_SCHEMA
-            value: "planner"
-          # Knowledge agent (Mosaic AI Vector Search). Required at runtime — without these the
-          # deployed App's knowledge gather falls back to empty. NOTE: the App service principal
-          # also needs USE on the VS endpoint + SELECT on the index; VS isn't a clean DABs resource,
-          # so grant it manually (like the Genie space carve-out).
-          - name: VECTOR_SEARCH_ENDPOINT
-            value: "supply-chain-planner-vs"
-          - name: VECTOR_SEARCH_INDEX
-            value: "serverless_stable_yau46e_catalog.planner.knowledge_chunks_index"
-          # Router is a constrained classifier → fast small model (cuts ~3-12s/run vs Opus);
-          # planner stays Opus for complex synthesis.
-          - name: LLM_ROUTER_ENDPOINT
-            value: "databricks-claude-haiku-4-5"
-          - name: LLM_PLANNER_ENDPOINT
-            value: "databricks-claude-opus-4-8"
-          - name: CHAT_APP_PORT
-            value: "3000"
-          - name: CHAT_PROXY_TIMEOUT_SECONDS
-            value: "300"
-          - name: LOG_LEVEL
-            value: "INFO"
+          - name: LAKEBASE_UC_CATALOG
+            value: ${var.uc_catalog}
 
-      # Resources this App's service principal can access.
+          # --- Unity Catalog (Genie + operational Delta source) ---
+          - name: UC_CATALOG
+            value: ${var.uc_catalog}
+          - name: UC_SCHEMA
+            value: ${var.uc_schema}
+          - name: GENIE_SPACE_ID
+            value: ${var.genie_space_id}
+          - name: DATABRICKS_EMBEDDING_ENDPOINT
+            value: ${var.embedding_endpoint}
+
+          # --- Knowledge (Vector Search) ---
+          - name: VECTOR_SEARCH_ENDPOINT
+            value: ${var.vector_search_endpoint}
+          - name: VECTOR_SEARCH_INDEX
+            value: ${var.uc_catalog}.${var.uc_schema}.knowledge_chunks_index
+
+          # --- Inference ---
+          - name: LLM_ROUTER_ENDPOINT
+            value: ${var.llm_router_endpoint}
+          - name: LLM_PLANNER_ENDPOINT
+            value: ${var.llm_endpoint}
+
+          - name: LOG_LEVEL
+            value: ${var.log_level}
+
+      # App-SP resource grants. Only the experiment (tracing telemetry) — data surfaces are OBO.
       resources:
         - name: 'experiment'
           experiment:
-            # dev: the per-user experiment auto-created by the agent at first run.
-            # Re-point or blank-then-deploy to provision a fresh one per target.
-            experiment_id: "1699732530746200"
+            experiment_id: ${resources.experiments.planner_experiment.id}
             permission: 'CAN_MANAGE'
-        - name: 'postgres'
-          postgres:
-            branch: ${var.lakebase_branch}
-            database: ${var.lakebase_database}
-            permission: 'CAN_CONNECT_AND_CREATE'
 
-  # Setup / seed job — provisions the demo dataset (operational tables + pgvector + Synced
-  # Tables + Genie schema). Task wiring lands in Slice 4 (serverless Python tasks over the
-  # data/ scripts); kept as a named placeholder so the bundle validates today.
-  # jobs:
-  #   setup_and_seed:
-  #     name: "supply-chain-planner-setup-and-seed"
-  #     tasks: []
+  # Setup-and-seed job — loads the demo dataset. Run it for demo samples; skip it to bring your
+  # own data. Two independent chains after the schema bootstrap: operational (Lakebase) + knowledge
+  # (Vector Search). Serverless Python tasks over the data/ scripts; notebooks where the file
+  # carries the `# Databricks notebook source` header.
+  jobs:
+    setup_and_seed:
+      name: "supply-chain-planner-setup-and-seed"
+      tasks:
+        # Idempotent: create the operational schema + the MLflow trace schema (+ volume) up front.
+        # Serverless tasks can't take env vars, and they're exec'd without __file__/sys.path set —
+        # so PYTHON tasks run through data/_seed_task.py, which fixes sys.path and applies the
+        # config JSON (&seed_cfg) to os.environ before running the real script. NOTEBOOK tasks get
+        # the same config as job widgets (&seed_widgets), read by config._job_param_overrides().
+        - task_key: bootstrap_schemas
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/00_bootstrap_schemas.py
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}"}'
+          environment_key: seed
+
+        # --- Operational chain → Lakebase ---
+        # These three are notebook-source files but use only get_spark()/spark.sql — no dbutils or
+        # magics — so they run as launcher Python tasks like the rest (the notebook import-path
+        # bootstrap can't find the bundle root on serverless; the launcher fixes sys.path + env).
+        - task_key: create_operational_schema
+          depends_on: [{ task_key: bootstrap_schemas }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/genie/01_create_operational_schema.py
+              - *seed_cfg
+          environment_key: seed
+        - task_key: generate_operational_data
+          depends_on: [{ task_key: create_operational_schema }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/01_generate_genie_tables.py
+              - *seed_cfg
+          environment_key: seed
+        - task_key: pre_seed_pgvector
+          depends_on: [{ task_key: generate_operational_data }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/02_pre_seed_pgvector.py
+              - *seed_cfg
+          environment_key: seed
+        - task_key: sync_to_lakebase
+          depends_on: [{ task_key: pre_seed_pgvector }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/03_sync_to_lakebase.py
+              - *seed_cfg
+          environment_key: seed
+        - task_key: verify_hybrid_query
+          depends_on: [{ task_key: sync_to_lakebase }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/04_verify_hybrid_query.py
+              - *seed_cfg
+          environment_key: seed
+        # Genie space only needs the operational Delta tables — decoupled from the Lakebase
+        # sub-chain so a Lakebase issue doesn't block it.
+        - task_key: create_genie_space
+          depends_on: [{ task_key: generate_operational_data }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/genie/02_create_genie_space.py
+              - *seed_cfg
+          environment_key: seed
+
+        # --- Knowledge chain → Vector Search (independent of the Lakebase chain) ---
+        - task_key: upload_pdfs
+          depends_on: [{ task_key: bootstrap_schemas }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/knowledge/01_upload_pdfs.py
+              - *seed_cfg
+          environment_key: seed
+        - task_key: parse_and_chunk
+          depends_on: [{ task_key: upload_pdfs }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/knowledge/02_parse_and_chunk.py
+              - *seed_cfg
+          environment_key: seed
+        - task_key: build_vs_index
+          depends_on: [{ task_key: parse_and_chunk }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/knowledge/03_build_vs_index.py
+              - *seed_cfg
+          environment_key: seed
+
+      # Lean serverless environment. Only the packages the seed scripts actually import that
+      # AREN'T already in the serverless base: psycopg (Lakebase, via _lakebase.py) and
+      # pypdf + langchain-text-splitters (knowledge/02). Everything else they need —
+      # databricks-sdk (Genie/VS/embeddings/synced-tables), pyspark, mlflow, pydantic — ships in
+      # the serverless base, so requesting it here only risks version conflicts. (The original fat
+      # list, esp. databricks-langchain[memory], made pip's resolver backtrack and fail to install.)
+      environments:
+        - environment_key: seed
+          spec:
+            client: "3"
+            dependencies:
+              - "psycopg[binary]"
+              - "pypdf"
+              - "langchain-text-splitters"
+              # The serverless base SDK is too old for w.postgres (Lakebase autoscaling). Upgrade it
+              # for the operational tasks (02/03/04). Small dep tree — unlike databricks-langchain,
+              # it doesn't make the resolver backtrack.
+              - "databricks-sdk>=0.81"
 
 targets:
+  # Personal iteration on YOUR workspace. mode:development prefixes resource names with your user.
+  # Host comes from the --profile you pass (portable — no workspace hardcoded here).
   dev:
     mode: development
     default: true
-    workspace:
-      host: https://fevm-serverless-stable-yau46e.cloud.databricks.com
-    # Dev is isolated from the demo on its own copy-on-write branch (same workspace + project).
-    variables:
-      lakebase_branch: projects/mfg-supply-chain-copilot/branches/development
-      lakebase_branch_name: development
 
+  # Clean shared/demo deploy — fixed resource names, no user prefix.
   demo:
     mode: production
     workspace:
-      host: https://fevm-serverless-stable-yau46e.cloud.databricks.com
-    # demo uses the variable defaults (production branch).
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     resources:
       apps:
         supply_chain_planner:

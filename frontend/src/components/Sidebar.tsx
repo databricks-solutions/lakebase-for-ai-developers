@@ -8,12 +8,14 @@ export function Sidebar({
   currentThread,
   onNew,
   onOpen,
+  onDelete,
 }: {
   me: Me | null;
   sessions: Session[];
   currentThread: string;
   onNew: () => void;
   onOpen: (threadId: string) => void;
+  onDelete: (threadId: string) => void;
 }) {
   return (
     <aside
@@ -49,19 +51,37 @@ export function Sidebar({
         {sessions.map((s) => {
           const active = s.thread_id === currentThread;
           return (
-            <button
+            <div
               key={s.thread_id}
-              onClick={() => onOpen(s.thread_id)}
-              title={s.preview || s.title}
+              className="session-row"
               style={{
-                display: "block", width: "100%", textAlign: "left", font: "inherit",
-                color: "var(--fg-on-dark)", background: active ? "var(--db-navy-700)" : "transparent",
-                border: "none", borderRadius: "var(--radius-md)", padding: "10px 10px",
-                cursor: "pointer", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                display: "flex", alignItems: "center", marginBottom: 2,
+                borderRadius: "var(--radius-md)", background: active ? "var(--db-navy-700)" : "transparent",
               }}
             >
-              {s.title || "Untitled"}
-            </button>
+              <button
+                onClick={() => onOpen(s.thread_id)}
+                title={s.preview || s.title}
+                style={{
+                  flex: 1, minWidth: 0, textAlign: "left", font: "inherit", color: "var(--fg-on-dark)",
+                  background: "transparent", border: "none", padding: "10px 10px", cursor: "pointer",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}
+              >
+                {s.title || "Untitled"}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm("Delete this conversation? (It's hidden from your history; the data is retained.)")) onDelete(s.thread_id);
+                }}
+                title="Delete conversation"
+                aria-label="Delete conversation"
+                style={delBtn}
+              >
+                ✕
+              </button>
+            </div>
           );
         })}
       </div>
@@ -94,4 +114,10 @@ const newBtn: CSSProperties = {
   width: "100%", font: "inherit", fontWeight: 500, padding: "10px 14px",
   borderRadius: "var(--radius-pill)", border: "1px solid var(--db-navy-600)",
   background: "transparent", color: "var(--fg-on-dark)", cursor: "pointer",
+};
+
+const delBtn: CSSProperties = {
+  flexShrink: 0, width: 28, height: 28, marginRight: 4, display: "grid", placeItems: "center",
+  font: "inherit", fontSize: 13, lineHeight: 1, color: "var(--fg-on-dark-2)", background: "transparent",
+  border: "none", borderRadius: "var(--radius-md)", cursor: "pointer", opacity: 0.6,
 };

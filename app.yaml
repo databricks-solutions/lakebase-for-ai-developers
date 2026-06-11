@@ -65,9 +65,10 @@ env:
   - name: VECTOR_SEARCH_INDEX
     value: "serverless_stable_yau46e_catalog.planner.knowledge_chunks_index"
 
-  # Two LLM callsites (router + planner); single inference model for v1.
+  # Two LLM callsites: a fast router (constrained classifier — small model is plenty, cuts a few
+  # seconds/turn) and the planner (complex synthesis — stays Opus). Matches databricks.yml + config.
   - name: LLM_ROUTER_ENDPOINT
-    value: "databricks-claude-opus-4-8"
+    value: "databricks-claude-haiku-4-5"
   - name: LLM_PLANNER_ENDPOINT
     value: "databricks-claude-opus-4-8"
 
