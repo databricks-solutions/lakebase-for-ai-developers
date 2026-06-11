@@ -168,6 +168,13 @@ class Settings(BaseModel):
         default=None, alias="MLFLOW_TRACING_SQL_WAREHOUSE_ID"
     )
 
+    @field_validator("mlflow_tracing_warehouse_id")
+    @classmethod
+    def _normalize_warehouse(cls, v: str | None) -> str | None:
+        # The bundle defaults this to the "unset" sentinel (DABs drops empty env values, which Apps
+        # rejects). Treat the sentinel / blank as "no warehouse" → UC tracing stays off.
+        return None if (v or "").strip().lower() in ("", "unset", "none") else v
+
     # --- Derived helpers ---
     @property
     def seed_data_dir(self) -> Path:

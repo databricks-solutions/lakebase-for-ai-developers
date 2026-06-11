@@ -96,9 +96,12 @@ variables:
   mlflow_trace_prefix:
     description: Table-name prefix for the UC trace tables.
     default: scp
-  # (No sql_warehouse_id var: an empty default would emit a name-only env entry that Apps rejects.
-  #  UC tracing works without a designated warehouse; to pin one, add MLFLOW_TRACING_SQL_WAREHOUSE_ID
-  #  to the app env explicitly.)
+  # SQL warehouse that backs UC trace storage. REQUIRED for traces (and 👍/👎 feedback) to record on
+  # Databricks Apps — without it, tracing stays off. Defaults to the "unset" sentinel (NOT empty:
+  # DABs drops empty env values and Apps rejects the name-only entry); config treats "unset" as off.
+  sql_warehouse_id:
+    description: SQL warehouse id for MLflow UC tracing. Set a real id to enable traces; "unset" = tracing off.
+    default: "unset"
 
   log_level:
     description: App log level.
@@ -148,6 +151,8 @@ resources:
             value: ${var.mlflow_trace_schema}
           - name: MLFLOW_TRACE_TABLE_PREFIX
             value: ${var.mlflow_trace_prefix}
+          - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
+            value: ${var.sql_warehouse_id}   # "unset" sentinel (non-empty) → config treats as off
 
           # --- Lakebase (autoscaling) — app SP mints OAuth DB creds from these coords ---
           - name: LAKEBASE_AUTOSCALING_PROJECT

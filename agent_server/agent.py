@@ -78,7 +78,9 @@ def _setup_mlflow_experiment() -> None:
         cat = settings.mlflow_trace_catalog or settings.uc_catalog
         sch = settings.mlflow_trace_schema
         wh = settings.mlflow_tracing_warehouse_id or settings.warehouse_id
-        if cat and sch:
+        # UC tracing needs catalog + schema AND a SQL warehouse to store traces. Without all three
+        # we can't do UC tracing on Apps — fall through to plain experiment tracing.
+        if cat and sch and wh:
             try:
                 from mlflow.entities.trace_location import UnityCatalog
 
@@ -86,19 +88,33 @@ def _setup_mlflow_experiment() -> None:
                     catalog_name=cat, schema_name=sch,
                     table_prefix=settings.mlflow_trace_table_prefix,
                 )
-                if wh:
-                    os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = wh
+                os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = wh
             except Exception as exc:  # mlflow < 3.11, or location unsupported
                 logger.warning("UC trace location unavailable; default tracing: %s", exc)
                 trace_location = None
+        else:
+            # Clear the sentinel/blank the bundle may have set so MLflow never sees a bogus id.
+            os.environ.pop("MLFLOW_TRACING_SQL_WAREHOUSE_ID", None)
+            if cat and sch:
+                logger.warning("MLflow UC tracing OFF: no SQL warehouse set (sql_warehouse_id). "
+                               "Traces (and 👍/👎 feedback) won't record on Apps until you set one.")
 
         if settings.mlflow_experiment_id:
             # Bind to the explicitly-configured (shared project) experiment. Attaching a UC trace
             # destination needs the experiment NAME, so resolve it from the id. NOTE: the target
             # experiment must have NO existing traces for a UC destination to bind.
             if trace_location is not None:
-                exp = mlflow.get_experiment(settings.mlflow_experiment_id)
-                mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
+                try:
+                    exp = mlflow.get_experiment(settings.mlflow_experiment_id)
+                    mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
+                except Exception as exc:  # e.g. app SP lacks USE CATALOG on the trace catalog
+                    logger.warning(
+                        "UC trace binding failed (%s); falling back to plain experiment tracing. "
+                        "Grant the App SP USE CATALOG on %s + USE SCHEMA/CREATE TABLE/MODIFY on "
+                        "%s.%s to enable UC traces.", exc, cat, cat, sch,
+                    )
+                    trace_location = None
+                    mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
             else:
                 mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
         elif mlflow.get_tracking_uri() == "databricks":
