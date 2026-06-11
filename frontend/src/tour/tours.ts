@@ -41,6 +41,18 @@ export const TOURS: Record<string, Tour> = {
         body: "Not sure where to begin? Click a suggested question — the Henkel one walks the headline hybrid pgvector + operational-join scenario.",
       },
       {
+        target: "nav-review",
+        side: "bottom",
+        title: "Review — the decision surface",
+        body: "When the planner proposes a fix, it pauses here for a human. Approve, hold, or edit each action individually, record a rationale, and commit. Partial decisions are first-class — approve some, hold one — and nothing writes until you commit.",
+      },
+      {
+        target: "nav-lakebase",
+        side: "bottom",
+        title: "Lakebase — what the decision changed",
+        body: "The durable state behind the agent: approved actions, planning-parameter overrides, constraints, and the recalled decisions in agent memory. Flip the Engineer/Planner lens to read the same rows as raw Postgres or in plain language.",
+      },
+      {
         target: "inspect",
         side: "bottom",
         title: "Peer into the backend",

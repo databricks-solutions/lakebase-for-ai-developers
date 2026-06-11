@@ -1,4 +1,4 @@
-import type { AgentExtras, ExplorerData, Me, Session } from "./types";
+import type { AgentExtras, ExplorerData, Me, ResumeDecisions, Session, StateTables } from "./types";
 
 async function jsonOrThrow(r: Response) {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`);
@@ -54,15 +54,21 @@ interface StreamHandlers {
   onError: (msg: string) => void;
 }
 
-async function consumeSSE(payload: Record<string, unknown>, handlers: StreamHandlers): Promise<void> {
+async function consumeSSE(
+  payload: Record<string, unknown>,
+  handlers: StreamHandlers,
+  signal?: AbortSignal
+): Promise<void> {
   let res: Response;
   try {
     res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
   } catch (e) {
+    if (signal?.aborted) return; // caller cancelled (unmount / new turn) — not an error
     handlers.onError(String(e));
     return;
   }
@@ -73,37 +79,69 @@ async function consumeSSE(payload: Record<string, unknown>, handlers: StreamHand
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const frames = buf.split("\n\n");
-    buf = frames.pop() ?? "";
-    for (const frame of frames) {
-      const line = frame.split("\n").find((l) => l.startsWith("data:"));
-      if (!line) continue;
-      let obj: any;
-      try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
-      if (obj.type === "step" && obj.label) handlers.onStep?.(obj.label);
-      else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", { ...(obj.extras ?? {}), trace_id: obj.trace_id } as AgentExtras);
-      else if (obj.type === "error") handlers.onError(obj.error || "stream error");
-      else if (obj.type === "substep" && obj.label) handlers.onSubstep?.(obj.node ?? "", obj.label);
-      else if (obj.type === "trace" && obj.note) handlers.onTrace?.(obj.note);
-      else if (obj.type === "route" && Array.isArray(obj.agents)) handlers.onRoute?.(obj.agents, obj.reasoning ?? "");
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const frames = buf.split("\n\n");
+      buf = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        let obj: any;
+        try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (obj.type === "step" && obj.label) handlers.onStep?.(obj.label);
+        else if (obj.type === "done") handlers.onDone(obj.text || "(no text)", { ...(obj.extras ?? {}), trace_id: obj.trace_id } as AgentExtras);
+        else if (obj.type === "error") handlers.onError(obj.error || "stream error");
+        else if (obj.type === "substep" && obj.label) handlers.onSubstep?.(obj.node ?? "", obj.label);
+        else if (obj.type === "trace" && obj.note) handlers.onTrace?.(obj.note);
+        else if (obj.type === "route" && Array.isArray(obj.agents)) handlers.onRoute?.(obj.agents, obj.reasoning ?? "");
+      }
     }
+  } catch (e) {
+    if (signal?.aborted) return; // caller cancelled mid-stream — stop quietly
+    handlers.onError(String(e));
+  } finally {
+    reader.cancel().catch(() => {}); // release the stream lock on normal end or abort
   }
 }
 
 /** New turn — streams step progress then the final answer. */
-export const streamMessage = (text: string, threadId: string, handlers: StreamHandlers): Promise<void> =>
-  consumeSSE({ question: text, thread_id: threadId }, handlers);
+export const streamMessage = (
+  text: string,
+  threadId: string,
+  handlers: StreamHandlers,
+  signal?: AbortSignal
+): Promise<void> =>
+  consumeSSE({ question: text, thread_id: threadId }, handlers, signal);
 
-/** Resume a paused HITL run with the approval verdict — streams the commit then the result. */
+/**
+ * Resume a paused HITL run with per-action decisions — streams the commit then the result.
+ * Body: { thread_id, verdict, rationale, action_decisions: [{key, status, edited_qty?,
+ * safety_stock_override?}] }. A binary "quick approve" from the chat card passes an empty
+ * `action_decisions` array (the backend then applies each action's default).
+ */
 export const resumeMessage = (
   threadId: string,
-  verdict: "approved" | "rejected",
-  handlers: StreamHandlers
-): Promise<void> => consumeSSE({ thread_id: threadId, verdict }, handlers);
+  decisions: ResumeDecisions,
+  handlers: StreamHandlers,
+  signal?: AbortSignal
+): Promise<void> =>
+  consumeSSE(
+    {
+      thread_id: threadId,
+      verdict: decisions.verdict,
+      rationale: decisions.rationale,
+      action_decisions: decisions.action_decisions,
+    },
+    handlers,
+    signal
+  );
+
+/** Read the durable Lakebase tables + recalled memory for a thread (Lakebase page). */
+export const getStateTables = (threadId: string): Promise<StateTables> =>
+  fetch(`/api/state/tables?thread_id=${encodeURIComponent(threadId)}`).then(jsonOrThrow);
 
 /** Log 👍/👎 feedback on a run's MLflow trace. */
 export const sendFeedback = (traceId: string, value: boolean, comment?: string): Promise<{ ok: boolean }> =>
