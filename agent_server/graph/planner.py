@@ -48,32 +48,46 @@ def _stream_writer():
 APPROVAL_COST_THRESHOLD_USD = 50_000.0
 
 _SYSTEM_PROMPT = """\
-You are the planner for a supply-chain planning copilot. Given a planner's question and the
-evidence gathered by retrieval/analytics/operational agents — plus the planner's own prior
-decisions recalled from long-term memory — produce a concise, actionable recommendation.
+You are the planner for a supply-chain planning copilot. Using the gathered evidence — plus
+the planner's own prior decisions recalled from long-term memory — produce a concise,
+actionable recommendation.
 
+<grounding>
+Ground every claim in the provided evidence. Do not invent SKUs, suppliers, quantities, or
+statuses. If the evidence does not contain what is needed to answer, say so explicitly (e.g.
+"the available data does not show supplier risk flags") and recommend what to gather next.
+An ungrounded recommendation is worse than naming the gap, because a planner may act on it.
+</grounding>
+
+<continuity>
 If the question refers to an earlier conversation ("what did we decide…", "continue this
 morning's escalation", "last time"), ground your answer in the recalled prior decisions and
 say what was decided before; only escalate again if genuinely new action is needed.
+</continuity>
 
-Return fields:
+Return these fields:
 - summary: one-line recommendation a planner can act on.
 - actions: 1-5 concrete, ordered steps (e.g. "Expedite a 200-unit reorder of SKU-1001 from an
   alternate supplier").
-- is_action_bearing: true if the recommendation COMMITS NEW SPEND or is RISKY/IRREVERSIBLE — it
-  tells the planner to reorder, expedite, re-source, pre-buy, quarantine, or hold for the first
-  time. false for purely INFORMATIONAL answers that only report/look up/aggregate (counts, totals,
-  status, "which suppliers are at risk", "what do the contracts say"), AND false for answers that
-  merely RECALL, SUMMARIZE, or CONTINUE a decision already made in a prior conversation ("what did
-  we decide…", "continue this morning's escalation", "remind me…") — these report or follow up on
-  an existing decision; they do not commit new action. Only set true when you are proposing a NEW
-  commitment beyond what was already decided. When in doubt about a genuinely new action, prefer true.
-- est_cost_usd: your best dollar estimate of executing the recommended actions (reorder / expedite
-  / re-source cost). Return 0 for a purely informational answer (no spend committed). Only return
-  null if it is action-bearing but you genuinely cannot estimate.
+- is_action_bearing: whether the recommendation COMMITS NEW SPEND or is RISKY/IRREVERSIBLE
+  (reorder, expedite, re-source, pre-buy, quarantine, or hold for the first time). Set true
+  only when proposing a NEW commitment beyond what was already decided — BUT a recommendation
+  about WHETHER to commit a new spend or risk (e.g. whether to pre-buy ahead of a price
+  increase, re-source, or expedite) gates that spend decision, so treat it as action-bearing.
+  When genuinely in doubt about a new action, prefer true — under-escalating a spend decision
+  is worse than an extra approval. See the examples below.
+- est_cost_usd: your best dollar estimate of executing the recommended actions (reorder /
+  expedite / re-source cost). Return 0 for a purely informational answer (no spend committed).
+  Return null only if it is action-bearing but you genuinely cannot estimate.
 - reasoning: 1-3 sentences justifying the recommendation from the evidence.
 
-Be specific and ground every claim in the provided evidence. Do not invent SKUs, suppliers, or numbers."""
+<is_action_bearing_examples>
+- "Which suppliers are currently flagged at risk?" -> false (informational lookup; reports status, commits nothing).
+- "What do our contracts say about late-delivery penalties?" -> false (informational).
+- "Remind me what we decided this morning about SKU-1001." -> false (recalls an existing decision).
+- "Recommend a mitigation for the recurring adhesive cracking." -> true (proposes new action: reorder / expedite / quarantine).
+- "Find related notes and similar incidents, and recommend whether to pre-buy ahead of the price increase." -> true (gates a new spend decision, even if you advise caution).
+</is_action_bearing_examples>"""
 
 
 class _PlannerDraft(BaseModel):
@@ -171,16 +185,23 @@ def _llm_draft(question: str, evidence: str, memory: str = "", history: str = ""
         # NB: no temperature — Opus-class reasoning models reject the param (BAD_REQUEST).
         llm = ChatDatabricks(endpoint=settings.llm_planner_endpoint)
         structured = llm.with_structured_output(_PlannerDraft)
-        user_content = f"Question:\n{question}\n\nEvidence:\n{evidence}"
+        # Longform context first (memory/history/evidence), question + task last — per
+        # Anthropic long-context guidance — each block wrapped in XML tags so the model
+        # parses instructions vs. data unambiguously.
+        sections: list[str] = []
         if memory:
-            # Memory is advisory: prefer it to personalize, but ground claims in current evidence.
-            user_content = (
-                "Recalled memory (consider it to personalize, but ground every claim in the "
-                f"current evidence below):\n{memory}\n\n" + user_content
-            )
+            # Memory is advisory: use it to personalize, but ground claims in current evidence.
+            sections.append(f"<recalled_memory>\n{memory}\n</recalled_memory>")
         if history:
             # Short-term conversation context — resolve follow-up referents from earlier turns.
-            user_content = f"{history}\n\n" + user_content
+            sections.append(f"<conversation_history>\n{history}\n</conversation_history>")
+        sections.append(f"<evidence>\n{evidence}\n</evidence>")
+        sections.append(
+            f"<question>\n{question}\n</question>\n\n"
+            "Produce the recommendation. Use recalled memory only to personalize; ground "
+            "every factual claim in the evidence above, and name any gap rather than guessing."
+        )
+        user_content = "\n\n".join(sections)
         return structured.invoke(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
