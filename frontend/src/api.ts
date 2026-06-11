@@ -1,4 +1,4 @@
-import type { AgentExtras, ExplorerData, Me, Session } from "./types";
+import type { AgentExtras, ChatMessage, ExplorerData, Me, Session } from "./types";
 
 async function jsonOrThrow(r: Response) {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${await r.text()}`);
@@ -17,13 +17,17 @@ export const listSessions = (): Promise<{ sessions: Session[] }> =>
 
 export const upsertSession = (
   threadId: string,
-  body: { title?: string; preview?: string; updated_at?: string }
+  body: { title?: string; preview?: string; updated_at?: string; messages?: unknown[] }
 ): Promise<Session> =>
   fetch(`/api/sessions/${encodeURIComponent(threadId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }).then(jsonOrThrow);
+
+/** Rehydrate a past conversation's transcript (so clicking a historical session reopens it). */
+export const getSessionMessages = (threadId: string): Promise<{ messages: ChatMessage[] }> =>
+  fetch(`/api/sessions/${encodeURIComponent(threadId)}/messages`).then(jsonOrThrow);
 
 /** Pull all assistant text out of an MLflow ResponsesAgentResponse `output` array. */
 function extractText(output: any[]): string {

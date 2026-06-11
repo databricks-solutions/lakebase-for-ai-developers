@@ -396,17 +396,45 @@ async def list_sessions(request: Request) -> dict[str, Any]:
 @router.put("/sessions/{thread_id}")
 async def upsert_session(thread_id: str, request: Request, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     caller = caller_identity(request)
+    label = _ns_label(caller.email)
+    ns = ("ui_sessions", label)
+    # Merge with the existing record so omitted fields are preserved — e.g. the inferred title is
+    # sent only on the first turn; follow-up turns omit it and must NOT reset it to "New conversation".
+    try:
+        existing = await _with_db_retry(lambda: _store().aget(ns, thread_id))
+        cur = (existing.value if existing else None) or {}
+    except Exception:  # noqa: BLE001
+        cur = {}
     value = {
-        "title": (body.get("title") or "New conversation")[:120],
-        "updated_at": body.get("updated_at") or "",
-        "preview": (body.get("preview") or "")[:200],
+        "title": (body.get("title") or cur.get("title") or "New conversation")[:120],
+        "updated_at": body.get("updated_at") or cur.get("updated_at") or "",
+        "preview": ((body.get("preview") if body.get("preview") is not None else cur.get("preview")) or "")[:200],
     }
     try:
-        ns = ("ui_sessions", _ns_label(caller.email))
         await _with_db_retry(lambda: _store().aput(ns, thread_id, value))
+        # Persist the rendered transcript (separate namespace so the sessions LIST stays light) so a
+        # past chat can be reopened in a fresh browser session instead of showing an empty panel.
+        msgs = body.get("messages")
+        if isinstance(msgs, list):
+            tns = ("ui_transcripts", label)
+            await _with_db_retry(lambda: _store().aput(tns, thread_id, {"messages": msgs[-200:]}))
     except Exception as exc:  # noqa: BLE001
         logger.warning("upsert_session failed: %s", exc)
     return {"thread_id": thread_id, **value}
+
+
+@router.get("/sessions/{thread_id}/messages")
+async def session_messages(thread_id: str, request: Request) -> dict[str, Any]:
+    """Rehydrate a past conversation — returns the persisted transcript for a thread so clicking a
+    historical session in the sidebar reopens it (instead of a dead/empty panel)."""
+    caller = caller_identity(request)
+    tns = ("ui_transcripts", _ns_label(caller.email))
+    try:
+        item = await _with_db_retry(lambda: _store().aget(tns, thread_id))
+        return {"messages": (item.value or {}).get("messages", []) if item else []}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("session_messages failed: %s", exc)
+        return {"messages": [], "error": str(exc)}
 
 
 @router.get("/_seed_demo_memories")
