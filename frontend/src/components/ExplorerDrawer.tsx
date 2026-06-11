@@ -12,13 +12,39 @@ const ACCENTS: Record<string, string> = {
 };
 
 /** Right-hand drawer: one card per backend component, each with deep links + a live peek. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// The Databricks Apps proxy returns a 502 (HTML) page while the worker is still warming up right
+// after a deploy. /api/explorer is a static route, so a failure is almost always transient — retry
+// a few times, and never show the raw HTML body.
+const friendlyErr = (e: unknown) => {
+  const s = String(e);
+  if (/\b50[234]\b/.test(s)) return "The app is still warming up (or briefly unavailable). Click retry in a moment.";
+  return s.length > 200 ? s.slice(0, 200) + "…" : s;
+};
+
 export function ExplorerDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [data, setData] = useState<ExplorerData | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0); // bump to retry
 
   useEffect(() => {
-    if (open && !data) getExplorer().then(setData).catch((e) => setErr(String(e)));
-  }, [open, data]);
+    if (!open || data) return;
+    let cancelled = false;
+    setErr(null);
+    (async () => {
+      for (let i = 0; i < 3; i++) {
+        try {
+          const d = await getExplorer();
+          if (!cancelled) setData(d);
+          return;
+        } catch (e) {
+          if (i === 2) { if (!cancelled) setErr(friendlyErr(e)); }
+          else { await sleep(900 * (i + 1)); }
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, data, attempt]);
 
   return (
     <>
@@ -51,7 +77,12 @@ export function ExplorerDrawer({ open, onClose }: { open: boolean; onClose: () =
           </p>
         </header>
         <div style={{ padding: "var(--space-4)", overflowY: "auto", display: "grid", gap: "var(--space-4)" }}>
-          {err && <p style={{ color: "var(--danger)" }}>{err}</p>}
+          {err && (
+            <div style={{ display: "grid", gap: 10, justifyItems: "start" }}>
+              <p style={{ color: "var(--fg-2)" }}>{err}</p>
+              <button onClick={() => { setErr(null); setAttempt((a) => a + 1); }} style={peekBtn}>Retry</button>
+            </div>
+          )}
           {data?.cards.map((c) => <ResourceCard key={c.key} card={c} />)}
           {!data && !err && <p style={{ color: "var(--fg-2)" }}>Loading…</p>}
         </div>
