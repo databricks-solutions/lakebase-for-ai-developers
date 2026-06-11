@@ -134,6 +134,47 @@ class RouterDecision(BaseModel):
 
 # ── Planner / gate / HITL ────────────────────────────────────────────────────────────────
 
+class ActionKind(str, Enum):
+    EXPEDITE_PO = "expedite_po"            # pull in an existing open PO → approved_actions
+    SPLIT_SOURCE = "split_source"          # buffer order from alternate supplier → approved_actions
+    RAISE_SAFETY_STOCK = "raise_safety_stock"  # bump SKU safety stock → planning_parameters
+    ALLOCATION_CONSTRAINT = "allocation_constraint"  # prioritize a program → constraints
+    # Quality-containment playbook (Meridian quality pivot) — maps the seeded Henkel cracking
+    # scenario onto the same three write-back tables as the shortage kinds.
+    QUALITY_HOLD = "quality_hold"          # hold N on-hand units pending validation → approved_actions
+    QUARANTINE_PO = "quarantine_po"        # quarantine/inspect an incoming PO → approved_actions
+    TIGHTEN_INSPECTION = "tighten_inspection"  # raise inspection level → planning_parameters
+    SUPPLIER_QUALITY_HOLD = "supplier_quality_hold"  # hold supplier's SKU until validated → constraints
+
+
+class ActionFact(BaseModel):
+    k: str
+    v: str
+    tone: str | None = None
+
+
+class PlannedAction(BaseModel):
+    key: str                       # stable per-action id, e.g. "expedite-po-2026-0042"
+    kind: ActionKind
+    title: str
+    detail: str
+    target_table: Literal["approved_actions", "planning_parameters", "constraints"]
+    editable: bool = True
+    qty: float | None = None
+    qty_label: str | None = None
+    qty_min: float | None = None
+    qty_max: float | None = None
+    qty_step: float | None = None
+    facts: list[ActionFact] = Field(default_factory=list)
+    cost_delta: float | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    default_status: Literal["approve", "hold"] = "approve"
+    sku: str | None = None
+    supplier_id: str | None = None
+    po_id: str | None = None
+    program: str | None = None
+
+
 class PlannerRecommendation(BaseModel):
     summary: str  # one-line recommendation
     actions: list[str]  # ordered steps the planner proposes
@@ -142,6 +183,7 @@ class PlannerRecommendation(BaseModel):
     est_cost_usd: float | None = None
     reasoning: str | None = None
     citations: list[str] = Field(default_factory=list)  # source paths / SQL refs
+    planned_actions: list[PlannedAction] = Field(default_factory=list)  # structured Meridian plan
 
 
 class HITLVerdict(str, Enum):
@@ -150,7 +192,18 @@ class HITLVerdict(str, Enum):
     # EDITED = "edited"  # P2; not yet
 
 
+class ActionDecision(BaseModel):
+    """Per-action HITL choice: keep/hold + optional edited qty / safety-stock override."""
+
+    key: str
+    status: Literal["approve", "hold"] = "approve"
+    edited_qty: float | None = None
+    safety_stock_override: float | None = None
+
+
 class HITLDecision(BaseModel):
     verdict: HITLVerdict
     note: str | None = None
     user_id: str
+    rationale: str | None = None  # required at the resume edge for an approved Meridian commit
+    action_decisions: list[ActionDecision] = Field(default_factory=list)

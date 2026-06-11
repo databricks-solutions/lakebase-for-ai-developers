@@ -169,7 +169,11 @@ def _latest_user_text(request: ResponsesAgentRequest) -> str:
 
 
 def _resume_command(request: ResponsesAgentRequest, user_id: str) -> Optional[Command]:
-    """If the request carries an HITL verdict, build a Command(resume=HITLDecision)."""
+    """If the request carries an HITL verdict, build a Command(resume=HITLDecision).
+
+    Also pulls the Meridian per-action review payload (`hitl_rationale` + `hitl_action_decisions`)
+    from custom_inputs so a resumed approval commits the human's per-action choices + rationale.
+    Bare verdict/note remain back-compatible."""
     ci = dict(request.custom_inputs or {})
     verdict = ci.get("hitl_verdict")
     if not verdict:
@@ -179,6 +183,8 @@ def _resume_command(request: ResponsesAgentRequest, user_id: str) -> Optional[Co
             verdict=HITLVerdict(verdict),
             note=ci.get("hitl_note"),
             user_id=user_id or "unknown",
+            rationale=ci.get("hitl_rationale"),
+            action_decisions=ci.get("hitl_action_decisions") or [],
         ).model_dump()
     )
 
@@ -198,14 +204,20 @@ def _render_recommendation(rec) -> str:
 
 
 def _custom_outputs(state: dict, interrupt_payload: Any | None) -> dict[str, Any]:
+    from agent_server.graph.planner import _evidence_bundle
+
     rec = state.get("recommendation")
     hitl = state.get("hitl_decision")
     rd = state.get("route_decision")
     out: dict[str, Any] = {
         "trace_notes": state.get("trace_notes", []),
         "route_decision": rd.model_dump() if rd else None,
+        # recommendation.model_dump() already carries planned_actions (the structured Meridian plan).
         "recommendation": rec.model_dump() if rec else None,
         "hitl_decision": hitl.model_dump() if hitl else None,
+        # The evidence the plan rests on + what the commit wrote (None until the run commits).
+        "evidence": _evidence_bundle(state),
+        "commit_ledger": state.get("commit_ledger"),
         "status": "awaiting_approval" if interrupt_payload is not None else "completed",
     }
     if interrupt_payload is not None:
