@@ -117,11 +117,13 @@ def _evidence_summary(state: dict) -> str:
 def _decision_from_state(state: dict) -> dict:
     rd = state.get("route_decision")
     rec = state.get("recommendation")
+    planned = [a.model_dump() for a in rec.planned_actions] if (rec and rec.planned_actions) else []
     return {
         "route": rd.agents if rd else [],
         "route_reasoning": rd.reasoning if rd else None,
         "summary": rec.summary if rec else None,
         "actions": rec.actions if rec else [],
+        "planned_actions": planned,  # structured Meridian plan (each maps to a write-back table)
         "needs_approval": rec.needs_approval if rec else None,
         "is_action_bearing": rec.is_action_bearing if rec else None,
         "est_cost_usd": rec.est_cost_usd if rec else None,
@@ -159,6 +161,7 @@ def _decision_from_custom_outputs(co: dict) -> dict:
         "route_reasoning": rd.get("reasoning"),
         "summary": rec.get("summary"),
         "actions": rec.get("actions", []),
+        "planned_actions": rec.get("planned_actions", []),  # structured Meridian plan
         "needs_approval": rec.get("needs_approval"),
         "is_action_bearing": rec.get("is_action_bearing"),
         "est_cost_usd": rec.get("est_cost_usd"),
