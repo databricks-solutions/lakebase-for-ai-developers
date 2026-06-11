@@ -33,16 +33,27 @@ validate: _require_profile
 	databricks bundle validate -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 
 # Build + deploy the App/experiment, then seed demo data unless SEED=false.
+# NOTE: `bundle deploy` only uploads source + creates the app OBJECT (the shell). It does NOT
+# create an app DEPLOYMENT — that needs `bundle run <app-key>` (= apps deploy), which points the
+# app at the source and makes it live. Without this the app shows "No source code / Unavailable".
 deploy: _require_profile build
 	databricks bundle deploy -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
+	@echo "==> deploying the app (creates the active deployment; bundle deploy only made the shell)"
+	databricks bundle run supply_chain_planner -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 	@if [ "$(SEED)" = "true" ]; then \
 	  echo "==> seeding demo data (SEED=true)"; \
 	  $(MAKE) seed PROFILE=$(PROFILE) TARGET=$(TARGET); \
 	else \
 	  echo "==> skipping seed (SEED=false) — point uc_catalog/uc_schema at your own data"; \
 	fi
-	@echo "==> done. After the seed finishes, grab the Genie space id from the create_genie_space"
-	@echo "    task output, set var.genie_space_id, and re-run 'make deploy' to wire Analytics."
+	@echo "==> done."
+	@if [ "$(SEED)" = "true" ]; then \
+	  echo "    NEXT (one-time, to wire the Analytics/Genie route): the seed's create_genie_space task"; \
+	  echo "    printed a Genie space id. Grab it (Jobs UI -> create_genie_space task -> Output), then"; \
+	  echo "    redeploy the app with it set:"; \
+	  echo "      make deploy PROFILE=$(PROFILE) SEED=false VARS=\"$(VARS) genie_space_id=<the-id>\""; \
+	  echo "    Until set, every route works except Genie. See docs/DEPLOYMENT_GUIDE.md sec.5."; \
+	fi
 
 # Load the demo dataset (operational + pgvector + Genie + Knowledge/Vector-Search).
 seed: _require_profile

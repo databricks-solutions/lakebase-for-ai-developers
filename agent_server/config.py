@@ -60,6 +60,14 @@ class Settings(BaseModel):
     genie_space_id: str = Field(default="", alias="GENIE_SPACE_ID")
     warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
 
+    @field_validator("genie_space_id")
+    @classmethod
+    def _normalize_genie_space_id(cls, v: str) -> str:
+        # The DABs bundle defaults GENIE_SPACE_ID to a non-empty sentinel ("unset") because Apps
+        # rejects env entries with no value and DABs drops empty strings. Treat the sentinel (and
+        # any blank) as unset so the Analytics route degrades gracefully (genie_tool checks falsy).
+        return "" if (v or "").strip().lower() in ("", "unset", "none") else v
+
     # --- Demo (operational data) ---
     # In-scope planner identity for the user_access ACL. Unset → the current Databricks user
     # (so the OBO demo works for whoever runs it); set to a fixed email for a shared demo.

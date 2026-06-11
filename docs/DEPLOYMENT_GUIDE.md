@@ -72,10 +72,10 @@ database — which match the bundle defaults (`lakebase_project` / `lakebase_bra
 `lakebase_endpoint` / `lakebase_database`). If you use different names, set the matching variables
 in §4.
 
-**Register the Lakebase database as a UC catalog** (needed for the operational synced tables). The
-autoscaling `create-catalog` CLI has a known body-stripping bug, so do it in the **UI**: *Catalog
-Explorer → Create catalog → from a Lakebase database* → name it `mfg_supply_chain_lakebase` (or set
-`lakebase_uc_catalog`).
+That's the only Lakebase prerequisite. You do **not** need to register the Lakebase database as a
+separate UC catalog — the operational synced tables land in **`uc_catalog`** (schema `public`), and
+the bundle's `bootstrap_schemas` task creates that schema for you. The synced-table spec carries its
+own `branch` + `postgres_database`, so a plain writable catalog is all it needs.
 
 ---
 
@@ -86,15 +86,18 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 
 | Variable | Default | Set to |
 |---|---|---|
-| `uc_catalog` | `main` | your writable catalog |
+| **`uc_catalog`** ← the one you must set | `main` | **a catalog you can write to** — `main` usually doesn't exist on a fresh workspace, so this is the one variable you'll almost always override. Holds the Delta tables, Knowledge volume, VS index, trace schema, **and** the operational synced tables (schema `public`). |
 | `uc_schema` | `supply_chain_planner` | schema for the demo tables |
 | `lakebase_project` / `_branch` / `_endpoint` / `_database` | `mfg-supply-chain-copilot` / `production` / `primary` / `databricks_postgres` | your Lakebase coordinates |
-| `lakebase_uc_catalog` | `mfg_supply_chain_lakebase` | the catalog from §3 |
 | `vector_search_endpoint` | `supply-chain-planner-vs` | VS endpoint name (created by the seed job) |
 | `embedding_endpoint` | `databricks-gte-large-en` | a Databricks embedding endpoint |
 | `llm_endpoint` | `databricks-claude-opus-4-8` | a Foundation Model endpoint |
-| `sql_warehouse_id` | *(blank)* | a warehouse id to **enable** UC tracing (blank = skip tracing) |
-| `genie_space_id` | *(blank)* | set **after** the seed job creates it (§5, step 4) |
+| `genie_space_id` | `unset` (sentinel) | leave as-is for the first deploy; set the real id **after** the seed creates the space (§5, post-deploy step 2). The app treats `unset` as no-Genie. |
+
+> Bundle variables that feed app env vars must **never default to an empty string** — DABs drops
+> empty values and the Apps API rejects the resulting name-only entry. That's why `genie_space_id`
+> uses the `unset` sentinel, and why there's no `sql_warehouse_id` var (UC tracing works without a
+> pinned warehouse; to pin one, add `MLFLOW_TRACING_SQL_WAREHOUSE_ID` to the app env explicitly).
 
 ---
 
@@ -107,7 +110,14 @@ databricks auth login --host https://<your-workspace>.cloud.databricks.com --pro
 # 1. one command: build the SPA, deploy the bundle, seed the demo data.
 #    Pass workspace-specific variables via VARS (no need to edit databricks.yml):
 make deploy PROFILE=<p> VARS="uc_catalog=<your-writable-catalog>"
+
+#    Override any other default the same way — e.g. if you named the Lakebase project differently:
+make deploy PROFILE=<p> VARS="uc_catalog=<catalog> lakebase_project=<your-project-id>"
 ```
+
+> **Whatever you pass as `lakebase_project` here, pass the same to `grant_app_sp.sh`** in the
+> post-deploy step (`LAKEBASE_PROJECT=<your-project-id> …`) — otherwise it targets the default
+> project and errors with *Project 'projects/mfg-supply-chain-copilot' not found*.
 
 The seed job is **fully serverless and self-contained** — every data script runs through the
 `data/_seed_task.py` launcher (which fixes `sys.path` + injects config, since serverless tasks
@@ -115,26 +125,52 @@ get no env vars and no `__file__`), the bundle creates all schemas it needs (inc
 `public` schema), and `sync_to_lakebase` creates the synced tables via the **REST API** (the
 `databricks` CLI is blocked on serverless compute). No manual schema/table creation is required.
 
-That wrapper runs three steps (raw equivalents are in the header of `databricks.yml`):
+That wrapper runs four steps (raw equivalents are in the header of `databricks.yml`):
 1. `npm --prefix frontend ci && npm --prefix frontend run build` → `frontend/dist`
-2. `databricks bundle deploy -t dev --profile <p>` → App + experiment + job
-3. `databricks bundle run setup_and_seed -t dev --profile <p>` → loads demo data
+2. `databricks bundle deploy -t dev --profile <p>` → uploads source + creates the app **object**, experiment, job
+3. `databricks bundle run supply_chain_planner -t dev --profile <p>` → **deploys the app** (creates the active deployment that points it at the source and makes it live)
+4. `databricks bundle run setup_and_seed -t dev --profile <p>` → loads demo data
+
+> **Why step 3 is separate:** `bundle deploy` does *not* deploy an app — it only creates the app
+> object (the shell). The app stays "No source code / Unavailable" until `bundle run <app-key>`
+> (= `apps deploy`) creates a deployment. `make deploy` does this for you; if you ever run the raw
+> commands, don't skip it.
 
 Then the **two post-deploy steps** (these can't be DABs resources):
 
-3. **Grant the App's service principal a Lakebase Postgres role** (the App SP only exists after the
+1. **Grant the App's service principal a Lakebase Postgres role** (the App SP only exists after the
    first deploy, so this is a follow-up):
    ```bash
    PROFILE=<p> ./scripts/grant_app_sp.sh
+   # If you renamed the Lakebase project, pass it (must match the bundle's lakebase_project):
+   #   LAKEBASE_PROJECT=mfg-supply-chain-copilot-test PROFILE=<p> ./scripts/grant_app_sp.sh
    ```
-   The script resolves the App SP, registers it as a Postgres role, and runs the GRANTs. If your
-   Lakebase project/branch differ from the defaults, edit the `BRANCH=` line at the top first, or
-   add the role via the Lakebase **UI** (instance → Roles) and re-run.
+   The script resolves the App SP, registers it as a Postgres role, and runs the GRANTs. It reads
+   `LAKEBASE_PROJECT` / `LAKEBASE_BRANCH` / `LAKEBASE_ENDPOINT` from env (defaults match §3); or add
+   the role via the Lakebase **UI** (instance → Roles) and re-run.
 
-4. **Wire the Genie space.** The `create_genie_space` seed task prints a Genie space id in its run
-   output. Set `genie_space_id` to it and redeploy so the Analytics agent binds:
+2. **Wire the Genie space.** The Genie space is a carve-out — it isn't a DABs resource, so it's a
+   two-phase wire-up. The first deploy ran with `genie_space_id` blank; the seed's
+   `create_genie_space` task **created** a Genie space and printed its id. Grab that id and redeploy
+   the app (only) with it set, so the Analytics (NL→SQL) route binds.
+
+   **Get the id** from the `create_genie_space` task output:
    ```bash
-   make deploy PROFILE=<p> SEED=false       # redeploy app only; data already seeded
+   # find the latest setup_and_seed run, then read the create_genie_space task's output
+   RUN=$(databricks jobs list-runs --profile <p> -o json \
+     | python3 -c 'import sys,json;rs=[r for r in json.load(sys.stdin)["runs"] if "setup-and-seed" in r["run_name"]];print(rs[0]["run_id"])')
+   databricks jobs get-run "$RUN" --profile <p> -o json \
+     | python3 -c 'import sys,json;d=json.load(sys.stdin);print([t["run_id"] for t in d["tasks"] if t["task_key"]=="create_genie_space"][0])' \
+     | xargs -I{} databricks jobs get-run-output {} --profile <p> -o json \
+     | python3 -c 'import sys,json;print(json.load(sys.stdin).get("logs",""))' | grep -i "genie.*space\|space.*id"
+   ```
+   (Or open the run in the **Jobs UI → `create_genie_space` task → Output** and copy the id.)
+
+   **Set it and redeploy the app** — pass it via `VARS` along with the same catalog/project you
+   deployed with (`SEED=false` skips re-seeding; the data is already loaded):
+   ```bash
+   make deploy PROFILE=<p> SEED=false \
+     VARS="uc_catalog=<catalog> lakebase_project=<project-id> genie_space_id=<the-id>"
    ```
    (Until set, the Analytics/Genie route degrades gracefully — every other route works.)
 
@@ -226,10 +262,16 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | `/ui` returns "SPA not built" | `frontend/dist` wasn't shipped. Run `make deploy` (it builds first), not a raw `bundle deploy`. |
 | App `password authentication failed` (Lakebase) | App SP has no Postgres role → run `scripts/grant_app_sp.sh` (or add the role in the Lakebase UI). |
 | Knowledge route errors "VECTOR_SEARCH_INDEX not set" | The `build_vs_index` seed task didn't finish, or `uc_catalog`/`uc_schema` mismatch. Re-run `make seed`. |
-| Analytics/Genie route says no space | `genie_space_id` still blank → set it from the `create_genie_space` task output + redeploy (§5 step 4). |
+| Analytics/Genie route says no space | `genie_space_id` still blank → set it from the `create_genie_space` task output + redeploy (§5, post-deploy step 2). |
 | Traces don't appear | `sql_warehouse_id` blank (tracing off), or the App SP lacks the trace-schema grants in §6.B. |
-| Seed task seeds the wrong catalog | The task config comes from `databricks.yml` task parameters → `agent_server.config`. Check the task's run parameters/widgets in the job UI match your `uc_catalog`. |
-| `create-catalog` for Lakebase fails on CLI | Known autoscaling CLI bug — register the catalog in the **UI** (§3). |
+| Seed task seeds the wrong catalog | The task config is the JSON arg the bundle passes to `data/_seed_task.py` → `os.environ` → `agent_server.config`. Check the task's run parameters in the job UI match your `uc_catalog`. |
+| `sync_to_lakebase` fails: `Schema '<catalog>.public' does not exist` | `bootstrap_schemas` didn't run / a stale deploy — it creates `<uc_catalog>.public`. Re-run `make seed`. |
+| `sync_to_lakebase` fails: `The Databricks CLI is only supported ... web terminal` | A stale deploy without the fix — `03` must use the REST API path (`data/operational/03_sync_to_lakebase.py` via the SDK), not the CLI. Re-deploy. |
+| `bundle deploy` fails: `Cannot move node '… -traces' … because it is in trash folder` | You deleted the bundle-managed MLflow experiment but it's still in the workspace **trash**, and DABs' local state still tracks it. Fastest fix: `databricks experiments restore-experiment <id> -p <p>` then re-deploy. For a truly fresh experiment: permanently delete it (MLflow → Experiments → **Trash** → Delete permanently — UI only) **and** `rm -rf .databricks/bundle/<target>`, then re-deploy. |
+| `grant_app_sp.sh`: `Project 'projects/mfg-supply-chain-copilot' not found` | The script used the default project name. Pass the one you deployed with: `LAKEBASE_PROJECT=<your-project-id> PROFILE=<p> ./scripts/grant_app_sp.sh`. |
+| `bundle deploy` fails: `workspace_id mismatch` | Stale local state from a prior workspace. `rm -rf .databricks/bundle/<target>` and re-deploy (note: this also makes DABs forget the app/job/experiment it created — delete those on the workspace first if they still exist). |
+| App shows **"No source code" / "No active deployment"** but Status: Active | `bundle deploy` only created the app *object*; it doesn't deploy the app. Deploy it: `databricks bundle run supply_chain_planner -t <target> --profile <p> <--var …>`. `make deploy` now runs this automatically (step 3). |
+| `bundle run <app>` fails: `Must specify environment variable source using either value or valueFrom` | An app env var resolved to an **empty string** — DABs drops the value, leaving a name-only entry Apps rejects. Don't let any bundle variable that feeds app env default to `""` (use a sentinel like `unset`, or omit the env var). All current vars are fixed; if you add one, give it a non-empty default. |
 
 ---
 

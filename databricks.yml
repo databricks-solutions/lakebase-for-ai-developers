@@ -58,14 +58,19 @@ variables:
   lakebase_database:
     description: Lakebase Postgres database.
     default: databricks_postgres
-  lakebase_uc_catalog:
-    description: UC catalog that registers the Lakebase database (for operational synced tables).
-    default: mfg_supply_chain_lakebase
+  # NOTE: the operational synced tables live in uc_catalog (schema `public`), NOT a separate
+  # Lakebase-registered catalog — the synced-table spec carries its own branch + postgres_database,
+  # so a plain writable catalog works and the bundle creates the `public` schema in it. One catalog
+  # var to set (uc_catalog); LAKEBASE_UC_CATALOG below follows it.
 
   # --- Analytics (Genie) — carve-out: created by the seed job, then set here + redeploy. ---
   genie_space_id:
-    description: Genie space id. Blank until the seed job creates one (Analytics agent degrades gracefully until set).
-    default: ""
+    # Sentinel default, NOT empty: DABs drops empty-string env values, and Apps then rejects the
+    # name-only entry ("Must specify environment variable source"). config.py treats "unset" as
+    # no-Genie (the Analytics route degrades gracefully). Set the real id after the seed creates the
+    # space, then redeploy — a real id overrides the sentinel.
+    description: Genie space id. Defaults to the "unset" sentinel; set the real id after the seed job creates the space.
+    default: "unset"
 
   # --- Knowledge (Mosaic AI Vector Search). ---
   vector_search_endpoint:
@@ -87,9 +92,9 @@ variables:
   mlflow_trace_prefix:
     description: Table-name prefix for the UC trace tables.
     default: scp
-  sql_warehouse_id:
-    description: SQL warehouse id used by MLflow UC tracing. Leave blank to disable UC tracing (traces still attempt default export).
-    default: ""
+  # (No sql_warehouse_id var: an empty default would emit a name-only env entry that Apps rejects.
+  #  UC tracing works without a designated warehouse; to pin one, add MLFLOW_TRACING_SQL_WAREHOUSE_ID
+  #  to the app env explicitly.)
 
   log_level:
     description: App log level.
@@ -139,8 +144,6 @@ resources:
             value: ${var.mlflow_trace_schema}
           - name: MLFLOW_TRACE_TABLE_PREFIX
             value: ${var.mlflow_trace_prefix}
-          - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
-            value: ${var.sql_warehouse_id}
 
           # --- Lakebase (autoscaling) — app SP mints OAuth DB creds from these coords ---
           - name: LAKEBASE_AUTOSCALING_PROJECT
@@ -156,7 +159,7 @@ resources:
           - name: LAKEBASE_OPERATIONAL_SCHEMA
             value: "public"
           - name: LAKEBASE_UC_CATALOG
-            value: ${var.lakebase_uc_catalog}
+            value: ${var.uc_catalog}
 
           # --- Unity Catalog (Genie + operational Delta source) ---
           - name: UC_CATALOG
@@ -210,7 +213,7 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/00_bootstrap_schemas.py
-              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.lakebase_uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}"}'
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---
