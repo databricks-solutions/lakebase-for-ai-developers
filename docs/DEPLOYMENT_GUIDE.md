@@ -18,7 +18,7 @@ One `make deploy` produces all of this:
 |---|---|---|
 | **LangGraph agent** (supervisor → gather → planner → HITL) | `apps.supply_chain_planner` | In-process in the App (not Model Serving) |
 | **Your React chat UI** | same App | Served at **`/ui`** by `agent_server/webapp.py` |
-| Backend-explorer + history + 👍/👎 feedback APIs | same App | `/api/*` |
+| Backend explorer · **persistent per-user chat history** (reopen past chats; title inferred from the first message) · 👍/👎 feedback | same App | `/api/*` — history + transcripts persist in the Lakebase store; feedback logs to the run's trace |
 | Demo dataset (operational tables, pgvector, Genie space, Vector Search index) | `jobs.setup_and_seed` | Unity Catalog + Lakebase |
 | MLflow experiment (tracing target) | `experiments.planner_experiment` | Fresh per deploy |
 
@@ -182,6 +182,16 @@ Open the App URL `/ui`, sign in, and ask:
 *"Have we seen a disruption like the PrecisionBond recall before?"* → you should get a traced
 answer, and 👍/👎 should attach as an assessment in the experiment.
 
+> **Give it ~15–30s after deploy.** The app warms up behind the Databricks Apps proxy; the static
+> UI loads immediately but the first dynamic `/api/*` calls can briefly return a **502** during
+> that window. The chat and the "Inspect backend" drawer retry automatically — if you see a 502,
+> wait a moment and retry. A *persistent* 502 (after the app is warm) is a real error → check
+> **Apps UI → your app → Logs** (the `databricks apps logs` CLI only shows a startup snapshot).
+
+**Reopen a past chat:** start a conversation, reload the page, then click it under HISTORY — it
+rehydrates the full transcript (persisted in the Lakebase store) and is named after your first
+message. *Transcripts persist going forward only* — chats created before this build won't reopen.
+
 ---
 
 ## 6. Permissions checklist
@@ -216,12 +226,15 @@ Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `s
 - [ ] **Foundation Model endpoints** `CAN QUERY` on `<llm_endpoint>` **and** `<embedding_endpoint>`
       — the planner/router and the long-term-memory store run as the App SP
       (usually granted to all principals by default; verify in *Serving → endpoint → Permissions*)
-- [ ] **MLflow UC tracing** (only if `sql_warehouse_id` is set) — the SP writes trace tables, so:
+- [ ] **MLflow UC tracing** — required for traces **and the 👍/👎 feedback** to record. The SP
+      writes trace tables into `<uc_catalog>.<mlflow_trace_schema>`, so grant:
       ```sql
       GRANT USE CATALOG ON CATALOG <uc_catalog> TO `<app-sp-client-id>`;
       GRANT USE SCHEMA, CREATE TABLE, MODIFY ON SCHEMA <uc_catalog>.<mlflow_trace_schema> TO `<app-sp-client-id>`;
       ```
-      plus `CAN USE` on the tracing SQL warehouse. *Leave `sql_warehouse_id` blank to skip all of this.*
+      Without it the app starts fine but logs a non-fatal `Could not set MLflow experiment …
+      PERMISSION_DENIED: … USE CATALOG …` warning and **no traces appear** (so the experiment's
+      Traces tab — and any thumbs-up/down — stay empty). Skip only if you don't want tracing.
 - [ ] ❌ **Not needed:** SELECT on the operational/knowledge tables, Genie, or the VS index — those
       run **OBO** as the signed-in user (below).
 
@@ -272,6 +285,9 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | `bundle deploy` fails: `workspace_id mismatch` | Stale local state from a prior workspace. `rm -rf .databricks/bundle/<target>` and re-deploy (note: this also makes DABs forget the app/job/experiment it created — delete those on the workspace first if they still exist). |
 | App shows **"No source code" / "No active deployment"** but Status: Active | `bundle deploy` only created the app *object*; it doesn't deploy the app. Deploy it: `databricks bundle run supply_chain_planner -t <target> --profile <p> <--var …>`. `make deploy` now runs this automatically (step 3). |
 | `bundle run <app>` fails: `Must specify environment variable source using either value or valueFrom` | An app env var resolved to an **empty string** — DABs drops the value, leaving a name-only entry Apps rejects. Don't let any bundle variable that feeds app env default to `""` (use a sentinel like `unset`, or omit the env var). All current vars are fixed; if you add one, give it a non-empty default. |
+| "Inspect backend" / chat shows a **502** (raw HTML) right after deploy | Cold start — the worker is still warming behind the proxy (`/api/*` is briefly unavailable). The UI retries automatically; just wait ~15–30s and retry. Only a 502 that persists once the app is **warm** is a real error (check Apps UI → Logs). |
+| **No traces / 👍👎 in the experiment**; app logs `Could not set MLflow experiment … PERMISSION_DENIED … USE CATALOG` | The App SP lacks `USE CATALOG` on `<uc_catalog>` (+ schema grants on `<uc_catalog>.<mlflow_trace_schema>`). Run the two GRANTs in §6.B. Non-fatal — the app still works, it just doesn't record traces. |
+| Clicking a **historical chat** opens an empty panel | Either that chat predates this build (transcripts persist going forward only), or the store read failed (check logs). New chats persist + rehydrate automatically. |
 
 ---
 
