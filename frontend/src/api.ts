@@ -29,6 +29,12 @@ export const upsertSession = (
 export const getSessionMessages = (threadId: string): Promise<{ messages: ChatMessage[] }> =>
   fetch(`/api/sessions/${encodeURIComponent(threadId)}/messages`).then(jsonOrThrow);
 
+/** Soft-delete a conversation (server flags it deleted_by_user; data is retained, just hidden). */
+export const deleteSession = (threadId: string): Promise<{ deleted: boolean }> =>
+  fetch(`/api/sessions/${encodeURIComponent(threadId)}`, { method: "DELETE" })
+    .then((r) => r.json())
+    .catch(() => ({ deleted: false }));
+
 /** Pull all assistant text out of an MLflow ResponsesAgentResponse `output` array. */
 function extractText(output: any[]): string {
   const parts: string[] = [];

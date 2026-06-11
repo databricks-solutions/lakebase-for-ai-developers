@@ -30,6 +30,7 @@ from typing import Any, Optional
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
@@ -384,7 +385,8 @@ async def list_sessions(request: Request) -> dict[str, Any]:
         ns = ("ui_sessions", _ns_label(caller.email))
         items = await _with_db_retry(lambda: _store().asearch(ns, limit=100))
         sessions = sorted(
-            ({"thread_id": it.key, **(it.value or {})} for it in items),
+            ({"thread_id": it.key, **(it.value or {})}
+             for it in items if not (it.value or {}).get("deleted_by_user")),
             key=lambda s: s.get("updated_at", ""), reverse=True,
         )
         return {"sessions": sessions}
@@ -435,6 +437,25 @@ async def session_messages(thread_id: str, request: Request) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("session_messages failed: %s", exc)
         return {"messages": [], "error": str(exc)}
+
+
+@router.delete("/sessions/{thread_id}")
+async def delete_session(thread_id: str, request: Request) -> dict[str, Any]:
+    """Soft-delete: flag the session `deleted_by_user` so it's hidden from the history list. The
+    data is RETAINED — the session record (with the flag) and the transcript both stay in the
+    store; nothing is removed. Re-listing simply filters these out (see list_sessions)."""
+    caller = caller_identity(request)
+    ns = ("ui_sessions", _ns_label(caller.email))
+    try:
+        existing = await _with_db_retry(lambda: _store().aget(ns, thread_id))
+        value = dict((existing.value if existing else None) or {})
+        value["deleted_by_user"] = True
+        value["deleted_at"] = datetime.now(timezone.utc).isoformat()
+        await _with_db_retry(lambda: _store().aput(ns, thread_id, value))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("delete_session failed: %s", exc)
+        return {"thread_id": thread_id, "deleted": False, "error": str(exc)}
+    return {"thread_id": thread_id, "deleted": True}
 
 
 @router.get("/_seed_demo_memories")

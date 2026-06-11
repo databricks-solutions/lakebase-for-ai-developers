@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
-import { getMe, getSessionMessages, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
+import { deleteSession, getMe, getSessionMessages, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
 import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
@@ -90,6 +90,19 @@ export default function App() {
     [byThread]
   );
 
+  // Soft-delete a conversation: hide it immediately (optimistic), then flag it server-side
+  // (deleted_by_user — the data is retained). If it's the open one, start a fresh thread.
+  const onDelete = useCallback(
+    async (t: string) => {
+      setSessions((prev) => prev.filter((s) => s.thread_id !== t));
+      setByThread((m) => { const { [t]: _drop, ...rest } = m; return rest; });
+      if (t === thread) setThread(newThreadId());
+      try { await deleteSession(t); } catch { /* server best-effort */ }
+      refreshSessions();
+    },
+    [thread, refreshSessions]
+  );
+
   // HITL: approve/reject the awaiting-approval message in the current thread → resume the run.
   const onResume = useCallback(
     async (verdict: "approved" | "rejected") => {
@@ -133,6 +146,7 @@ export default function App() {
           currentThread={thread}
           onNew={() => setThread(newThreadId())}
           onOpen={onOpen}
+          onDelete={onDelete}
         />
         <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "var(--space-3) var(--space-5)", borderBottom: "1px solid var(--border)" }}>
