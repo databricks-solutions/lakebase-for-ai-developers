@@ -93,6 +93,7 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 | `embedding_endpoint` | `databricks-gte-large-en` | a Databricks embedding endpoint |
 | `llm_endpoint` | `databricks-claude-opus-4-8` | a Foundation Model endpoint |
 | `genie_space_id` | `unset` (sentinel) | leave as-is for the first deploy; set the real id **after** the seed creates the space (§5, post-deploy step 2). The app treats `unset` as no-Genie. |
+| `sql_warehouse_id` | `unset` (sentinel) | **set a real warehouse id to enable MLflow tracing + 👍/👎** (UC trace storage needs a warehouse). Leave `unset` = tracing off. Also grant the App SP `CAN USE` on it + the §6.B catalog grants. |
 
 > Bundle variables that feed app env vars must **never default to an empty string** — DABs drops
 > empty values and the Apps API rejects the resulting name-only entry. That's why `genie_space_id`
@@ -226,15 +227,17 @@ Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `s
 - [ ] **Foundation Model endpoints** `CAN QUERY` on `<llm_endpoint>` **and** `<embedding_endpoint>`
       — the planner/router and the long-term-memory store run as the App SP
       (usually granted to all principals by default; verify in *Serving → endpoint → Permissions*)
-- [ ] **MLflow UC tracing** — required for traces **and the 👍/👎 feedback** to record. The SP
-      writes trace tables into `<uc_catalog>.<mlflow_trace_schema>`, so grant:
+- [ ] **MLflow UC tracing** — required for traces **and the 👍/👎 feedback** to record. Needs THREE
+      things: (a) `sql_warehouse_id` set to a real warehouse (UC trace storage needs one); (b) the
+      App SP `CAN USE` on that warehouse; and (c) the App SP can write the trace tables:
       ```sql
       GRANT USE CATALOG ON CATALOG <uc_catalog> TO `<app-sp-client-id>`;
       GRANT USE SCHEMA, CREATE TABLE, MODIFY ON SCHEMA <uc_catalog>.<mlflow_trace_schema> TO `<app-sp-client-id>`;
       ```
-      Without it the app starts fine but logs a non-fatal `Could not set MLflow experiment …
-      PERMISSION_DENIED: … USE CATALOG …` warning and **no traces appear** (so the experiment's
-      Traces tab — and any thumbs-up/down — stay empty). Skip only if you don't want tracing.
+      Missing any of these → the app starts fine but logs a non-fatal `UC trace binding failed …
+      PERMISSION_DENIED: … USE CATALOG …` (or `UC tracing OFF: no SQL warehouse set`) and falls back
+      to plain tracing, which **doesn't record on Apps** (egress-blocked) — so the experiment's
+      Traces tab and any 👍/👎 stay empty. After granting, **redeploy** so setup re-runs.
 - [ ] ❌ **Not needed:** SELECT on the operational/knowledge tables, Genie, or the VS index — those
       run **OBO** as the signed-in user (below).
 
@@ -286,7 +289,7 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | App shows **"No source code" / "No active deployment"** but Status: Active | `bundle deploy` only created the app *object*; it doesn't deploy the app. Deploy it: `databricks bundle run supply_chain_planner -t <target> --profile <p> <--var …>`. `make deploy` now runs this automatically (step 3). |
 | `bundle run <app>` fails: `Must specify environment variable source using either value or valueFrom` | An app env var resolved to an **empty string** — DABs drops the value, leaving a name-only entry Apps rejects. Don't let any bundle variable that feeds app env default to `""` (use a sentinel like `unset`, or omit the env var). All current vars are fixed; if you add one, give it a non-empty default. |
 | "Inspect backend" / chat shows a **502** (raw HTML) right after deploy | Cold start — the worker is still warming behind the proxy (`/api/*` is briefly unavailable). The UI retries automatically; just wait ~15–30s and retry. Only a 502 that persists once the app is **warm** is a real error (check Apps UI → Logs). |
-| **No traces / 👍👎 in the experiment**; app logs `Could not set MLflow experiment … PERMISSION_DENIED … USE CATALOG` | The App SP lacks `USE CATALOG` on `<uc_catalog>` (+ schema grants on `<uc_catalog>.<mlflow_trace_schema>`). Run the two GRANTs in §6.B. Non-fatal — the app still works, it just doesn't record traces. |
+| **No traces / 👍👎 in the experiment** (Traces tab + UC trace tables empty) | UC tracing isn't enabled. Need all of: `sql_warehouse_id` set to a real warehouse; App SP `CAN USE` that warehouse; and the §6.B `USE CATALOG` + trace-schema grants. App logs `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` or `UC tracing OFF: no SQL warehouse set`. Fix, then **redeploy** (setup runs at startup). Non-fatal — the app still works. |
 | Clicking a **historical chat** opens an empty panel | Either that chat predates this build (transcripts persist going forward only), or the store read failed (check logs). New chats persist + rehydrate automatically. |
 
 ---
