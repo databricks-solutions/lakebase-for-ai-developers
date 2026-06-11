@@ -80,9 +80,13 @@ variables:
     description: Databricks embedding endpoint for the store + VS index.
     default: databricks-gte-large-en
 
-  # --- Inference (single model for router/retrieval/planner in v1). ---
+  # --- Inference. Two LLM callsites: a fast router (classifier) + the planner (synthesis). The
+  # gather/retrieval agents use Vector Search / Genie / Lakebase, not an LLM endpoint. ---
+  llm_router_endpoint:
+    description: Fast model for the supervisor/router (a constrained classifier — small is plenty).
+    default: databricks-claude-haiku-4-5
   llm_endpoint:
-    description: Foundation Model endpoint for the supervisor, retrieval, and planner.
+    description: Foundation Model endpoint for the planner (complex synthesis).
     default: databricks-claude-opus-4-8
 
   # --- MLflow 3 Unity-Catalog tracing (telemetry written by the App service principal). ---
@@ -179,9 +183,7 @@ resources:
 
           # --- Inference ---
           - name: LLM_ROUTER_ENDPOINT
-            value: ${var.llm_endpoint}
-          - name: LLM_RETRIEVAL_ENDPOINT
-            value: ${var.llm_endpoint}
+            value: ${var.llm_router_endpoint}
           - name: LLM_PLANNER_ENDPOINT
             value: ${var.llm_endpoint}
 
