@@ -174,7 +174,12 @@ resources:
           - name: LAKEBASE_DATABASE
             value: ${var.lakebase_database}
           - name: LAKEBASE_AGENT_MEMORY_SCHEMA
-            value: "supply_chain_planner_memory_app"
+            # The app SP creates + OWNS this schema at startup (it has CREATE on the DB via the
+            # postgres resource). It must be a name no prior/defunct SP already owns — a schema owned
+            # by an old SP (e.g. after an app delete+recreate) can't be written by the new SP and the
+            # checkpointer falls through to `public` → "permission denied for schema public" crash.
+            # See docs/lakebase-apps-permissions.md (SP-recreate orphaned-schema lifecycle).
+            value: "supply_chain_planner_memory"
           - name: LAKEBASE_WRITEBACK_SCHEMA
             value: "supply_chain_planner_app"
           - name: LAKEBASE_OPERATIONAL_SCHEMA

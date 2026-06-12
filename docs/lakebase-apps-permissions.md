@@ -239,9 +239,13 @@ no superuser grant on `public`, no `CREATE ON SCHEMA public` needed.
 
 ### Gotchas to keep in mind
 
-- The SP client-id **changes when an app is deleted + recreated**, orphaning the old Postgres role.
-  The resource re-registers the new SP on every redeploy, so this self-heals; the seed's
-  `grant_app_sp` task re-resolves the SP each run, so its SELECT grant follows the new role too.
+- The SP client-id **changes when an app is deleted + recreated** (it is **stable across deploys**,
+  only destroyed on delete). The seed's `grant_app_sp` re-resolves the SP each run, so the *public*
+  SELECT grant follows the new role. **But the SP-OWNED memory/write-back schemas do NOT self-heal**
+  — the old SP still owns them and the new SP can't write them → the checkpointer falls through to
+  `public` → `permission denied for schema public` crash. This is verified, not hypothetical (see
+  "App recreate & the orphaned-schema lifecycle" below). It is the single biggest operational sharp
+  edge in this design.
 - The Postgres **role name == the SP client-id (a UUID)**, not a display name.
 - The **deployer needs `CAN MANAGE` on the Lakebase project** to attach the `postgres` resource
   (add to the deployer-permissions checklist).
@@ -262,6 +266,65 @@ no superuser grant on `public`, no `CREATE ON SCHEMA public` needed.
   `docs/DEPLOYMENT_GUIDE.md` §6.A.
 - The `postgres` resource binds to a **pre-existing** project/branch/database — `make deploy` ensures
   it via `make lakebase-project` (`scripts/ensure_lakebase_project.py`) before deploying.
+
+---
+
+## App recreate & the orphaned-schema lifecycle (hardening)
+
+> Researched 2026-06 (Glean + Slack + public docs) after a live deploy hit this exact crash. The
+> agent-memory + write-back schemas are **owned by the app SP**, and that ownership is the sharp edge.
+
+**The mechanism (verified live).** The Apps platform auto-mints the app SP; it is **stable across
+deployments but destroyed on app delete**, and a **new SP (new client-id) is minted on recreate**
+(docs: *Configure authorization in a Databricks app* — *"You can't change the service principal
+assigned to an app or specify an existing service principal… The service principal remains the same
+across all deployments… When you delete the app, Databricks deletes the service principal."*). The
+Postgres **role name == the SP client-id**. So after a delete+recreate, the old SP's memory schema
+is **orphaned**; `databricks_ai_bridge` does `CREATE SCHEMA IF NOT EXISTS` (a no-op on the orphan)
+and `SET search_path TO <schema>, public`, the new SP isn't the owner, so the checkpointer's
+`CREATE TABLE` falls through to `public` (no CREATE there, by design) → crash.
+
+**You usually can't clean it up yourself.** `databricks_superuser` is **NOT a true Postgres
+superuser** (`NOLOGIN`, no `rolsuper`, no `SET ROLE`/ADMIN OPTION) — it cannot `DROP` / `ALTER OWNER`
+/ `REASSIGN OWNED` objects owned by a *different* (defunct) SP role. Tracked internally
+(LKB-6733 / ES-1872947, open as of 2026-05, no ETA). Only the control-plane `cloud_admin` (Databricks
+Support) can drop a stranded SP role. This was confirmed live: the deployer here is only an INHERIT
+member of `databricks_superuser` and **could not** drop the orphaned schema.
+
+### Prevention (in priority order)
+1. **Redeploy in place; never delete the app.** The SP — and thus its Postgres role and owned
+   schemas — is stable across deploys. Treat `bundle destroy`/app-delete as a deliberate, gated op.
+2. **If you must recreate, remove the Lakebase resource first (as `CAN MANAGE`).** Removing the
+   `postgres`/`database` app resource triggers the platform to **reassign the SP's owned objects to
+   you and drop the SP role** — the clean lifecycle hook. Without `CAN MANAGE`, the resource detaches
+   but objects are left orphaned.
+3. **Pick a memory/write-back schema name the *current* SP can own** (no prior/defunct SP owns it).
+   This is the interim fix applied here: `LAKEBASE_AGENT_MEMORY_SCHEMA` was pointed at a freed name
+   (`supply_chain_planner_memory`) so the live SP creates + owns it. *Caveat:* this only relocates the
+   future orphan — the next recreate orphans the new name.
+4. **(Robust, not yet implemented) Own the memory objects with a durable, app-independent role.**
+   The Lakebase-eng-validated pattern (Som Natarajan): a **headless `NOLOGIN INHERIT` group role**
+   created **via SQL** (`databricks_create_role`, so the creator keeps ADMIN OPTION) owns the objects;
+   each app SP is `GRANT`ed membership. A new SP just needs re-adding to the group — no orphan, no
+   reassignment. *Open complexity:* the checkpointer/store create tables as the connecting SP (owned
+   by the SP, not the group) unless we make them create as the group role; and the group-owns pattern
+   only works for SQL-created roles, not UI/SDK-created ones (there `cloud_admin` is the grantor).
+   This is the candidate durable hardening to iterate on.
+
+### Recovery when already orphaned (non-superuser deployer)
+- **Point the new SP at a fresh schema** and let it create+own it (cheapest; the orphan lingers,
+  harmless). ← what we did.
+- **If the old SP role still exists:** `GRANT <old_role> TO databricks_superuser;` then
+  `REASSIGN OWNED BY <old_role> TO <temp_role>` + `ALTER SCHEMA … OWNER TO <new_sp>` (docs: *Transfer
+  Postgres object ownership* — uses a temporary shared role; `REASSIGN OWNED` doesn't carry grants).
+- **If the old SP role is already gone** (auto-dropped on app delete): no self-serve path — the
+  objects are stranded; **file an ES/Support ticket** (only `cloud_admin` can drop them).
+
+### Why the originally-planned "grant_app_sp reassigns ownership" hardening was dropped
+It assumed the deployer is a Lakebase superuser. On a managed workspace the deployer is **not** — so a
+seed-time `ALTER OWNER`/`REASSIGN` of a foreign-owned schema fails. The realistic hardening is
+prevention (1–4 above) plus a **loud preflight** (detect a memory/write-back schema owned by a
+foreign principal and fail with remediation, instead of letting the app silently crash-loop).
 
 ---
 
