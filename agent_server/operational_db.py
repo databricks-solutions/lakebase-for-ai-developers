@@ -166,6 +166,90 @@ def ensure_memory_schema() -> None:
         conn.commit()
 
 
+def _durable_schema_name() -> str:
+    """Schema the durable long-running response store persists to. HARD-CODED in
+    `databricks_ai_bridge.long_running` (`AGENT_DB_SCHEMA = "agent_server"`) and NOT configurable via
+    env — so unlike the memory schema we can't repoint it to a freed name. Imported (not duplicated)
+    so it tracks the library if it ever renames; falls back to the documented constant."""
+    try:
+        from databricks_ai_bridge.long_running.models import AGENT_DB_SCHEMA
+
+        return AGENT_DB_SCHEMA
+    except Exception:  # noqa: BLE001 — library internals; the name is stable/documented
+        return "agent_server"
+
+
+def ensure_durable_schema() -> None:
+    """Make the connecting role own the durable long-running response schema BEFORE the library
+    lazily creates it — and loudly flag the case where it can't.
+
+    `databricks_ai_bridge.long_running` persists background/durable responses (the `responses` +
+    `messages` tables behind background mode and its stale-response scanner) to a HARD-CODED schema
+    (`agent_server`), created via `CREATE SCHEMA IF NOT EXISTS` at startup — so whoever runs that
+    first OWNS it. If a developer ran the durable server locally against this same (shared) Lakebase
+    branch, the schema already exists owned by THEIR user; the app SP's later `CREATE … IF NOT
+    EXISTS` no-ops, the SP gets no USAGE → every stale-scan iteration fails with
+    "permission denied for schema agent_server" and background mode is broken.
+
+    Running this (as the SP) before the durable `init_db()` makes the SP create+own the schema on a
+    fresh branch, so the library's later create is a harmless no-op. If the schema already exists
+    owned by a DIFFERENT principal (an already-polluted branch) we can't fix it here — a role can't
+    reassign a schema it doesn't own — so we log a loud, actionable remediation instead of letting it
+    resurface as a buried recurring traceback. Idempotent; sync (uses operational_pool)."""
+    schema = _durable_schema_name()
+    with operational_pool().connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_catalog.pg_get_userbyid(nspowner) AS owner "
+            "FROM pg_catalog.pg_namespace WHERE nspname = %s",
+            (schema,),
+        )
+        row = cur.fetchone()
+        owner = row["owner"] if row else None
+
+        if owner is None:
+            # Fresh branch — create it so the connecting role (the SP on Databricks) owns it.
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+            conn.commit()
+            logger.info("Created durable response schema %r (owned by the connecting role)", schema)
+            return
+
+        cur.execute("SELECT current_user AS role")
+        current_role = cur.fetchone()["role"]
+        if owner == current_role:
+            logger.debug("Durable response schema %r already owned by the connecting role", schema)
+            return
+
+        # Foreign-owned (typically created by a developer's local run against the shared branch).
+        # The connecting role can't reassign a schema it doesn't own, and `ALTER … OWNER TO <sp>`
+        # ALSO fails for the owner unless it can SET ROLE to the SP (membership it usually lacks) —
+        # so surface the two remediations an *owner* CAN run without SET ROLE: GRANT access to the
+        # SP (keeps ownership), or DROP + let the SP recreate+own it on restart (the clean fix).
+        grants = "\n".join(
+            [
+                f'GRANT USAGE, CREATE ON SCHEMA {schema} TO "{current_role}";',
+                f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO "{current_role}";',
+                f'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {schema} TO "{current_role}";',
+                f'ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{current_role}";',
+                f'ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "{current_role}";',
+            ]
+        )
+        logger.error(
+            "Durable response schema %r is owned by %r, not the connecting role %r — the durable "
+            "long-running store (background mode + its stale-response scanner) will fail with "
+            "'permission denied for schema %s'. Fix, as %r (the owner; `ALTER … OWNER TO` the SP "
+            "needs SET-ROLE membership the owner usually lacks): either GRANT the SP access —\n%s\n"
+            "— or, for clean SP ownership, `DROP SCHEMA %s CASCADE;` then restart the app so the SP "
+            "recreates+owns it.",
+            schema,
+            owner,
+            current_role,
+            schema,
+            owner,
+            grants,
+            schema,
+        )
+
+
 def _resolved_qty(action: PlannedAction, decision: Optional[ActionDecision]) -> float | None:
     """An explicit edited_qty from the human overrides the planner's proposed qty."""
     if decision is not None and decision.edited_qty is not None:
@@ -340,6 +424,7 @@ __all__ = [
     "vector_literal",
     "ensure_writeback_tables",
     "ensure_memory_schema",
+    "ensure_durable_schema",
     "build_writeback_rows",
     "write_committed_actions",
 ]

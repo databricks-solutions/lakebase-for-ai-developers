@@ -90,6 +90,19 @@ async def _lifespan(app):
             app.state.store = store
             set_lakebase_resources(checkpointer, store)
 
+            # The durable LongRunningAgentServer persists background responses to a HARD-CODED schema
+            # (`agent_server`) that it `CREATE … IF NOT EXISTS`-es inside `_original_lifespan`'s
+            # init_db. Whoever creates it first owns it; if a local run already created it under a
+            # human user, the SP's create no-ops and its stale-response scanner fails with
+            # "permission denied for schema agent_server". Run this BEFORE _original_lifespan so the
+            # SP creates+owns it on a fresh branch (and loudly flags an already-foreign-owned one).
+            try:
+                from agent_server.operational_db import ensure_durable_schema
+
+                await asyncio.to_thread(ensure_durable_schema)
+            except Exception as exc:  # noqa: BLE001 — best-effort; init_db still attempts the create
+                logger.warning("Could not ensure durable response schema (background mode may fail): %s", exc)
+
             async with _original_lifespan(app):
                 yield
     except Exception as exc:

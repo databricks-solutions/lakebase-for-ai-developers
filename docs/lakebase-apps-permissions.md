@@ -193,6 +193,7 @@ The model maps onto the repo like this:
 | `public.*` synced read tables (`inventory_current`, `open_pos`, `suppliers`, `quality_incidents`, …) | platform `databricks_writer_*` | `USAGE` + `SELECT` | **seed task `grant_app_sp`** (superuser GRANT) |
 | Agent-memory schema (LangGraph checkpoint + store) | App SP | `CREATE` + own | `postgres` app resource (`CONNECT` + `CREATE`) → SP self-creates at startup |
 | Write-back schema `supply_chain_planner_app` (`approved_actions` / `planning_parameters` / `constraints`) | App SP | `CREATE` + own + DML | `postgres` app resource (`CONNECT` + `CREATE`) → SP self-creates at startup |
+| Durable response schema `agent_server` (`responses` / `messages` — `databricks_ai_bridge` background mode) | App SP | `CREATE` + own + DML | `postgres` app resource → SP self-creates at startup **before** the library's `init_db` (see *The durable `agent_server` schema* below) |
 | MLflow experiment | deployer | `CAN_MANAGE` | `experiment` app resource |
 | Vector Search / Genie / Foundation Models / UC reads | — | nothing (OBO) | runs as the signed-in user |
 
@@ -213,8 +214,12 @@ The concrete wiring:
   `supply_chain_planner_app`) and `lakebase_memory_schema` name the two SP-owned schemas;
   `lakebase_operational_schema` (`public`) stays SELECT-only.
 - **[`agent_server/operational_db.py`](../agent_server/operational_db.py)** — at startup
-  `ensure_memory_schema()` and `ensure_writeback_tables()` `CREATE SCHEMA IF NOT EXISTS` + create
-  the write-back tables in the SP-owned schemas. This is what relies on the resource's CREATE grant.
+  `ensure_memory_schema()`, `ensure_writeback_tables()`, and `ensure_durable_schema()`
+  `CREATE SCHEMA IF NOT EXISTS` + create the tables in the SP-owned schemas. This is what relies on
+  the resource's CREATE grant. `ensure_durable_schema()` runs **before** the durable `init_db()`
+  (wired in `start_server._lifespan`, ahead of the library's lifespan) so the SP — not a developer's
+  local run — owns the hard-coded `agent_server` schema; see *The durable `agent_server` schema*
+  below.
 - **[`scripts/ensure_lakebase_project.py`](../scripts/ensure_lakebase_project.py)** — `make deploy`
   ensures the Lakebase project exists (idempotent) via `make lakebase-project` before deploying, so
   the `postgres` resource has a project/branch/database to bind to.
@@ -325,6 +330,55 @@ It assumed the deployer is a Lakebase superuser. On a managed workspace the depl
 seed-time `ALTER OWNER`/`REASSIGN` of a foreign-owned schema fails. The realistic hardening is
 prevention (1–4 above) plus a **loud preflight** (detect a memory/write-back schema owned by a
 foreign principal and fail with remediation, instead of letting the app silently crash-loop).
+
+---
+
+## The durable `agent_server` schema — a third orphan-class schema
+
+> Hit live 2026-06: the deployed app logged `ERROR … [durable] stale-scan iteration failed …
+> InsufficientPrivilege: permission denied for schema agent_server` on a loop, while otherwise
+> working. Same *class* as the orphaned-schema problem above, on a schema this doc didn't cover and
+> the orphan-fix couldn't reach.
+
+**What it is.** `databricks_ai_bridge.long_running` (the `LongRunningAgentServer` powering our
+run/poll/resume background mode) persists durable responses to its own Postgres tables —
+`responses` + `messages` — in a schema whose name is **hard-coded** in the library:
+`AGENT_DB_SCHEMA = "agent_server"` (`long_running/models.py`). At startup its `init_db()` runs
+`CREATE SCHEMA IF NOT EXISTS agent_server` + `create_all`, and a background **stale-response
+scanner** then `SELECT`s `agent_server.responses` every ~10s to fail orphaned background runs.
+
+**Why it broke.** Unlike the memory schema, the name **can't be repointed** to a freed name — it's
+hard-coded — so the orphan-fix trick (#3 above) doesn't apply. And whoever runs `CREATE SCHEMA …`
+**first owns it**. A developer who ran the durable server **locally against the shared Lakebase
+branch** created `agent_server` owned by their **own user** (our `.env` sets `LAKEBASE_AUTOSCALING_*`,
+so the library's `is_db_configured()` is true locally). The deployed app SP's later
+`CREATE … IF NOT EXISTS` then no-ops, the SP gets no `USAGE` → the scanner fails every iteration.
+Non-fatal (caught + logged) but background mode is broken and the log fills with the traceback.
+(The hard-coded name also means **any other `databricks_ai_bridge` durable app on the same Lakebase
+database collides** on `agent_server`.)
+
+**Reassigning ownership TO the SP is NOT self-serve.** `ALTER SCHEMA agent_server OWNER TO "<sp>"`
+fails with `must be able to SET ROLE "<sp>" (SQLSTATE 42501)` — the owner isn't a member of the SP
+role and can't add itself (the same "`databricks_superuser` is not a true superuser" limitation).
+The two fixes an **owner** *can* run without `SET ROLE`:
+- **(A, clean — what we did) `DROP SCHEMA agent_server CASCADE;` then restart the app.** The SP
+  recreates+owns it on startup. Loses the (ephemeral) in-flight durable-response rows; needs a
+  restart. Lands `agent_server` SP-owned, matching the memory/write-back schemas.
+- **(B, stopgap) `GRANT`** `USAGE, CREATE` on the schema + table/sequence DML to the SP. Zero
+  downtime, but human ownership remains → re-orphans if that role is ever dropped.
+
+**Prevention (shipped + practice).**
+1. **`ensure_durable_schema()`** (`operational_db.py`), called in `start_server._lifespan`
+   **before** the library's durable `init_db()`: as the SP it creates+owns `agent_server` on a fresh
+   branch (so the library's later create no-ops), and if it finds the schema **foreign-owned** it
+   logs a **loud preflight** ERROR with the owner-runnable `GRANT` / `DROP`+restart remediation —
+   instead of leaving the buried recurring scanner traceback. This is the durable structural fix for
+   every future deploy.
+2. **Don't run the durable server locally against the shared branch.** This is the root cause — a
+   local run pollutes the shared `agent_server`. Use **branch-per-developer** (point local `.env` at
+   a throwaway Lakebase branch), which the autoscaling model makes cheap, or otherwise avoid booting
+   the durable server against the shared branch. A per-dev branch also isolates the memory/write-back
+   schemas, sidestepping the orphan lifecycle above entirely.
 
 ---
 
