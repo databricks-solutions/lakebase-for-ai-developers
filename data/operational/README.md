@@ -3,8 +3,7 @@
 Synthetic **structured** data for the Supply-Chain Planner Copilot, plus the operational-Lakebase
 layer that backs the canonical demo:
 
-> *"Show me similar quality issues for this supplier, scoped to the product codes I can access,
-> joined to on-hand inventory and open POs."*
+> *"Show me similar quality issues for this supplier, joined to on-hand inventory and open POs."*
 
 Everything is deterministic ([`seeds.py`](seeds.py): fixed RNG seed + hand-set hero rows), so the
 demo and the Genie evals never drift. Same files run in the IDE and on Databricks (auth via the
@@ -27,7 +26,7 @@ the one same-source replacement PO (Henkel, 500) is risky, and there's an altern
 
 | Path | Tables | Why |
 |---|---|---|
-| **Synced Tables** (managed Delta→Postgres mirror, read-only) | `inventory_current`, `open_pos` (`LAKEBASE_SYNC_MODE`, default Snapshot; CDF on so it can flip to Continuous); `suppliers`, `product_dim`, `supplier_status`, `user_access` (Snapshot) | Relational data, no vectors — let the managed sync keep it fresh |
+| **Synced Tables** (managed Delta→Postgres mirror, read-only) | `inventory_current`, `open_pos` (`LAKEBASE_SYNC_MODE`, default Snapshot; CDF on so it can flip to Continuous); `suppliers`, `product_dim`, `supplier_status` (Snapshot) | Relational data, no vectors — let the managed sync keep it fresh |
 | **Native pre-seeded pgvector table** (written directly via psycopg) | `quality_incidents` (`embedding vector(1024)`) | A Delta `array<float>` syncs to Postgres `jsonb` (not a real `vector`), and synced tables are read-only — so the vector table can't ride a sync. We `CREATE TABLE` + compute embeddings via the endpoint + `INSERT ::vector` + `CREATE INDEX hnsw` ourselves |
 
 Lakebase pgvector has **no managed-embeddings option** (unlike Vector Search) — you always compute
@@ -41,12 +40,12 @@ lean/durable, never loaded with operational facts.)
 `purchase_orders`, `supplier_status` (schema = `data/genie/01_create_operational_schema.py`).
 
 **Operational helpers (gold; synced to Lakebase)** — `inventory_current(sku, on_hand_qty)`,
-`open_pos(supplier_id, sku, open_po_qty, next_expected_date)`, `user_access(user_id, scope)`.
+`open_pos(supplier_id, sku, open_po_qty, next_expected_date)`.
 
 **Operational pgvector (native Lakebase)** — `quality_incidents(incident_id, supplier_id, sku,
 category, summary, description, severity, status, incident_date, expired_at, embedding vector(1024))`.
-`summary` → `OperationalRow.summary`; `category` is the access-scope key (joined to `user_access`,
-never surfaced in the row shape); `expired_at IS NULL` = active.
+`summary` → `OperationalRow.summary`; `category` groups the semantic clusters (never surfaced in the
+row shape); `expired_at IS NULL` = active.
 
 ## The resolved hybrid query
 
@@ -56,7 +55,6 @@ SELECT m.summary, m.supplier_id, m.sku, i.on_hand_qty, po.open_po_qty,
 FROM quality_incidents m
 JOIN inventory_current i ON m.sku = i.sku
 JOIN open_pos          po ON m.supplier_id = po.supplier_id AND m.sku = po.sku
-JOIN user_access       ua ON ua.scope = m.category AND ua.user_id = :user_id   -- v1 predicate
 WHERE m.expired_at IS NULL
 ORDER BY m.embedding <=> :q
 LIMIT 5;
@@ -64,34 +62,30 @@ LIMIT 5;
 
 This replaces the stub in `agent_server/tools/operational_tool.py`; the agent returns the SQL in
 `OperationalResult.sql` for traceability. `04_verify_hybrid_query.py` asserts it reproduces the hero
-result and that the access predicate filters cross-scope users.
+result (cluster A dominates the top-5).
 
-## Access governance — Lakebase RLS is **next phase** (documented here, not built)
+## Access governance — SP-governed today; per-user scoping is a documented production option
 
-**Demo identity is dynamic.** The in-scope planner written to `user_access` defaults to the
-**current Databricks user** (`_lakebase.resolve_demo_user()`), or `DEMO_PLANNER_USER` if set — so
-the OBO demo works for whoever runs it, with no hardcoded email. `01` writes that identity and `04`
-queries as the same one. The out-of-scope user is a fixed fake (`planner.bob@…`) used only to prove
-scoping. For a shared demo, set `DEMO_PLANNER_USER` to the presenter's email before running `01`.
+Operational reads run as the **app service principal** (the Lakebase pool uses ambient SP creds),
+so every authenticated app user sees the same UC-governed data. There is **no per-user row scoping**.
 
-**v1** enforces access with the in-query predicate above (`user_access` join on `user_id`).
+A `user_access` ACL + an in-query `JOIN user_access ON ua.user_id = :user_id` predicate used to scope
+results to a demo "in-scope planner." It was removed: the ACL was seeded only for whoever ran the
+seed job (plus a fake out-of-scope user), so **every other user — every FE and customer — silently
+got zero rows**. That trap isn't worth a demo-only feature.
 
-**Next phase — Postgres-native RLS** (FGAC Design Guide "Path C"). UC row filters/column masks do
-**not** propagate to synced tables, so enforcement lives in Postgres. The Lakebase Data API maps the
-Databricks OAuth identity to a Postgres role, so `current_user()` is the caller's email. Then:
+**If per-user product-code scoping is needed in production**, add it without an app-side ACL table:
 
-```sql
-ALTER TABLE quality_incidents ENABLE ROW LEVEL SECURITY;
-CREATE POLICY scope_isolation ON quality_incidents USING (
-  category IN (SELECT scope FROM user_access WHERE user_id = current_user())
-);
--- repeat the pattern for the synced operational tables; GRANT roles per identity.
-```
+- **Postgres-native RLS** (FGAC Design Guide "Path C"). UC row filters/column masks do **not**
+  propagate to synced tables, so enforcement lives in Postgres. With per-user/OBO DB connections the
+  Lakebase Data API maps the Databricks OAuth identity to a Postgres role, so `current_user()` is the
+  caller's email. An `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY ... USING (...)` on the operational
+  tables then enforces scope on **every** query path (including the similarity search), can't be
+  bypassed, and is auditable.
+- **Or** an entitlements join driven by a real identity source (a governed entitlements table kept in
+  sync with the customer's IdP), not a hand-seeded demo ACL.
 
-With RLS the `JOIN user_access ... user_id = :user_id` predicate drops out — access is enforced by
-the engine on **every** query path (including the similarity search), can't be bypassed, and is
-auditable. (Genie's analytics tables are governed by Unity Catalog out of the box via OBO — no extra
-work there.)
+(Genie's analytics tables are governed by Unity Catalog out of the box via OBO — no extra work there.)
 
 ## Agent memory: dev vs prod (isolate by Lakebase BRANCH)
 

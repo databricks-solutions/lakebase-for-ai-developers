@@ -86,7 +86,7 @@ def caller_identity(request: Request) -> Caller:
     """Resolve the forwarded Databricks Apps user identity, with a local-dev fallback.
 
     On the deployed App the proxy injects `X-Forwarded-Access-Token` + `X-Forwarded-Email`;
-    locally we fall back to DEMO_PLANNER_USER (or the profile user) so the UI boots under uvicorn.
+    locally we fall back to the profile user so the UI boots under uvicorn.
     """
     h = request.headers
     token = h.get("x-forwarded-access-token")
@@ -95,8 +95,8 @@ def caller_identity(request: Request) -> Caller:
     if token and email:
         return Caller(email=email, user_id=user_id, access_token=token, is_local=False)
 
-    # Local dev: no Apps proxy in front. Use the configured demo planner, else the profile user.
-    email = settings.demo_planner_user or _local_user() or "local-dev@example.com"
+    # Local dev: no Apps proxy in front. Use the profile user.
+    email = _local_user() or "local-dev@example.com"
     return Caller(email=email, user_id=None, access_token=None, is_local=True)
 
 
@@ -138,10 +138,6 @@ def me(request: Request) -> dict[str, Any]:
         "user_id": c.user_id,
         "is_local": c.is_local,
         "workspace_host": _workspace_host(),
-        "demo_planner_user": settings.demo_planner_user,
-        # The agent scopes operational access to this identity (user_access ACL). Surfaced so
-        # the UI can warn when the signed-in user differs from the seeded in-scope planner.
-        "in_scope": (not settings.demo_planner_user) or (c.email == settings.demo_planner_user),
     }
 
 

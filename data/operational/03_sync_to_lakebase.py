@@ -4,7 +4,7 @@ Every operational table EXCEPT `quality_incidents` (the pgvector one, handled by
 Lakebase via managed Synced Tables — a read-only Postgres mirror of the Delta gold tables:
 
   Continuous (CDF, near-real-time): inventory_current, open_pos      — change with operations
-  Snapshot   (full copy):           suppliers, product_dim, supplier_status, user_access
+  Snapshot   (full copy):           suppliers, product_dim, supplier_status
 
 DABs cannot manage Autoscaling synced tables (see the databricks-lakebase skill), so this drives
 the `databricks postgres` CLI. Idempotent: existing synced tables are left in place (a re-run
@@ -43,7 +43,6 @@ SYNC_SPECS = [
     ("suppliers", ["supplier_id"], "SNAPSHOT"),
     ("product_dim", ["sku"], "SNAPSHOT"),
     ("supplier_status", ["supplier_id", "last_updated"], "SNAPSHOT"),
-    ("user_access", ["user_id", "scope"], "SNAPSHOT"),
 ]
 
 

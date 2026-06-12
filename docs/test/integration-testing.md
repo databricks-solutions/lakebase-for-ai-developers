@@ -4,7 +4,7 @@ How to set up the seeded data and verify the stack end-to-end, running **locally
 Databricks)** or **on Databricks compute**. The keystone test is
 [`data/operational/04_verify_hybrid_query.py`](../../data/operational/04_verify_hybrid_query.py):
 it exercises the whole operational path in one run — Lakebase auth → pgvector index → embedding
-endpoint → the synced relational tables → the hybrid join → the access predicate.
+endpoint → the synced relational tables → the hybrid join.
 
 > Scope today: **operational (Lakebase) + Genie (Analytics)** are fully testable. The full agent
 > end-to-end (supervisor → planner → HITL) is **pending** — `agent_server/tools/operational_tool.py`
@@ -81,7 +81,7 @@ Databricks** (notebook/job, ambient session) — same code either way.
 | # | Command | What / pass signal |
 |---|---|---|
 | 1 | `uv run python data/genie/01_create_operational_schema.py` | Empty 5-table DDL + column comments (idempotent). |
-| 2 | `uv run python data/operational/01_generate_genie_tables.py` | Populates the 5 Genie tables + `inventory_current`/`open_pos`/`user_access`. Prints the resolved demo user, **hero on-hand = 40.0**, **PO FK orphans = 0**. |
+| 2 | `uv run python data/operational/01_generate_genie_tables.py` | Populates the 5 Genie tables + `inventory_current`/`open_pos`. Prints **hero on-hand = 40.0**, **PO FK orphans = 0**. |
 | 3 | `uv run python data/operational/02_pre_seed_pgvector.py` | Creates the native `quality_incidents` pgvector table, embeds descriptions, builds the HNSW index. Smoke print: top-5 for the hero query are Henkel/SKU-1001 cracking rows. |
 | 4 | `uv run python data/operational/03_sync_to_lakebase.py` | Creates 6 Synced Tables; **then grant the App SP `SELECT`** (it prints the GRANTs). Watch `databricks postgres get-synced-table …` until each is `SUCCEEDED`. |
 | 5 | `uv run python data/genie/02_create_genie_space.py` | Creates the Genie space → paste the printed `GENIE_SPACE_ID` into `.env`. |
@@ -130,14 +130,13 @@ uv run python data/operational/04_verify_hybrid_query.py
 
 **Pass** = exit 0, `✓ All hybrid-query assertions passed`:
 
-- **In-scope user** (current Databricks user / `DEMO_PLANNER_USER`, scoped to `adhesives`): top-5 are
-  Henkel/SKU-1001 adhesive-cracking incidents; top row `on_hand = 40`, `open_po = 500`; the
-  `SUPERSEDED` (expired) row is absent; cluster A dominates (≥4/5).
-- **Out-of-scope user** (`planner.bob@…`, scoped to `fasteners`/`abrasives`): zero adhesive/hero rows
-  (proves the in-query access predicate) — though they *do* see their own fastener/abrasive incidents.
+- **Hero adhesive-cracking query:** top-5 are Henkel/SKU-1001 adhesive-cracking incidents; top row
+  `on_hand = 40`, `open_po = 500`; the `SUPERSEDED` (expired) row is absent; cluster A dominates
+  (≥4/5). The query runs as the app service principal — identity-independent, so every user gets
+  these same rows.
 
 This single run validates: Lakebase OAuth connection, `CREATE EXTENSION vector` + HNSW index, the
-embedding endpoint, the synced relational tables, the similarity-as-a-predicate join, and governance.
+embedding endpoint, the synced relational tables, and the similarity-as-a-predicate join.
 A non-zero exit prints exactly which assertion failed.
 
 ---
@@ -198,9 +197,8 @@ psycopg/CLI steps (3–5) and the Tier 2 verify locally.
 | `No Lakebase connection configured` | Set `LAKEBASE_AUTOSCALING_ENDPOINT` (+ project/branch) or `LAKEBASE_INSTANCE_NAME` in `.env` |
 | Step 1/2 fails locally with a Spark/session error | `databricks-connect` not installed (`uv sync`) or no serverless compute — set `serverless_compute_id = auto` in the profile |
 | Step 3 synced table fails | `LAKEBASE_UC_CATALOG` not registered (`databricks postgres create-catalog`), or missing `USE_SCHEMA`/`CREATE_TABLE` grants |
-| Tier 2 in-scope query returns 0 rows | The demo user in `user_access` ≠ the connecting identity — re-run step 2 (it writes the current user), or set `DEMO_PLANNER_USER` consistently |
-| Tier 2 out-of-scope query returns adhesive rows | Access predicate / `user_access` scopes wrong — re-run step 2 |
+| Tier 2 query returns 0 rows | The operational tables aren't seeded/synced — re-run steps 2–3; check the pgvector `quality_incidents` count in the Explorer drawer |
 | Embedding count mismatch (step 2) | Embedding endpoint unreachable or returned partial — check the endpoint name in `.env` |
 
 See [`data/operational/README.md`](../../data/operational/README.md) for the data design and the
-next-phase Lakebase RLS plan, and [`../sprint-plan.md`](../sprint-plan.md) for tiering vs the P0/P1/P2 scope.
+production access-control options, and [`../sprint-plan.md`](../sprint-plan.md) for tiering vs the P0/P1/P2 scope.

@@ -70,10 +70,6 @@ class GenieResult(BaseModel):
 
 # ── Operational agent (Lakebase hybrid query — WS2 owns the implementation) ───────────────
 
-class OperationalQuery(BaseModel):
-    question: str
-    user_id: str  # OBO; drives access-scope predicate inside the SQL
-
 
 class OperationalRow(BaseModel):
     """Whatever the hybrid SQL returns, normalized through this shape."""

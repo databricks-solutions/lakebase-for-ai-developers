@@ -100,11 +100,6 @@ export function Sidebar({
             </div>
           </div>
         </div>
-        {me && !me.in_scope && (
-          <p style={{ fontSize: 11, color: "var(--db-yellow-400, #ffcc66)", marginTop: 8 }}>
-            Heads up: data is scoped to {me.demo_planner_user}. Sign in as them to see the hero scenario.
-          </p>
-        )}
       </div>
     </aside>
   );

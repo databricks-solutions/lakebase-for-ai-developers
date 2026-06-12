@@ -2,7 +2,7 @@
 
 Pure Python (no Spark, no Databricks). Imported by:
 - `01_generate_genie_tables.py` — writes these rows to Delta (the 5 Genie tables + the
-  materialized `inventory_current` / `open_pos` / `user_access` helper tables).
+  materialized `inventory_current` / `open_pos` helper tables).
 - `02_pre_seed_pgvector.py`     — loads `quality_incidents` (with embeddings) into Lakebase.
 - `04_verify_hybrid_query.py`   — asserts the hero scenario reproduces.
 - `eval_set.py`                 — derives the certified Genie Q→expected literals.
@@ -28,24 +28,6 @@ TODAY = date(2026, 6, 5)  # the demo's "today"; matches CLAUDE.md currentDate
 CATEGORIES = ["adhesives", "fasteners", "abrasives", "safety", "tools"]
 LOCATIONS = ["DC-EAST", "DC-WEST", "DC-CENTRAL"]
 PO_STATUSES = ["open", "in_transit", "delivered", "cancelled"]
-
-# ── Demo identities (OBO / access scope) ─────────────────────────────────────────────────────
-# The in-scope planner is resolved DYNAMICALLY at generation time (the current Databricks user, or
-# DEMO_PLANNER_USER override) — see `_lakebase.resolve_demo_user()` — so the OBO demo works for
-# whoever runs it, not just one hardcoded email. `build_user_access(demo_user)` injects it.
-# The out-of-scope user is a deliberately-fake identity used only to prove the access predicate
-# (a user scoped to fasteners/abrasives never sees the adhesive hero cluster). RLS replaces the
-# in-query predicate next phase, keyed on current_user().
-OUT_OF_SCOPE_USER = "planner.bob@databricks.com"
-DEMO_USER_SCOPES = ["adhesives", "safety"]
-OUT_OF_SCOPE_SCOPES = ["fasteners", "abrasives"]
-
-
-def build_user_access(demo_user: str) -> list[dict]:
-    """ACL rows: the in-scope `demo_user` (adhesives/safety) + the fixed out-of-scope fake."""
-    rows = [{"user_id": demo_user, "scope": s} for s in DEMO_USER_SCOPES]
-    rows += [{"user_id": OUT_OF_SCOPE_USER, "scope": s} for s in OUT_OF_SCOPE_SCOPES]
-    return rows
 
 # ── Hero scenario anchors ────────────────────────────────────────────────────────────────────
 HERO_SUPPLIER_ID = "SUP-001"  # Henkel AG — the recurring at-risk adhesive supplier
@@ -253,7 +235,8 @@ def build_supplier_status() -> list[dict]:
 # Semantic CLUSTERS: each cluster is the SAME underlying defect described with VARIED vocabulary,
 # so cosine similarity must group on *meaning* (not shared tokens). Distractors are singletons.
 # Cluster A is the hero: Henkel (SUP-001) + SKU-1001, so it joins to inventory_current (on sku)
-# and open_pos (on supplier+sku). Clusters B/C are other categories → filtered out by the ACL.
+# and open_pos (on supplier+sku). Clusters B/C are other categories — the adhesive hero query
+# ranks them below cluster A by vector similarity, so cluster A dominates the top-5.
 
 _CLUSTER_A_ADHESIVE = [  # Henkel / SKU-1001 — adhesive brittleness/cracking (the hero cluster)
     ("Cured epoxy bead cracked under vibration on the assembly line.", "high", False),
@@ -292,7 +275,7 @@ _DISTRACTORS = [
 def build_quality_incidents() -> list[dict]:
     """Returns rows WITHOUT embeddings. `02_pre_seed_pgvector.py` computes the embedding of
     `description` via the endpoint and inserts the vector. `summary` flows to OperationalRow.summary;
-    `category` is the access-scope key (joined to user_access, never surfaced as a row field)."""
+    `category` groups the semantic clusters (never surfaced as a row field)."""
     products = build_products()
     # Pick a representative fastener and abrasive SKU for the distractor clusters.
     fastener_sku = next(p["sku"] for p in products if p["category"] == "fasteners")

@@ -33,26 +33,9 @@ def _ws():
 
 
 def _current_user(w=None) -> str:
-    """The authenticated Databricks user — the single source for 'who am I' so the ACL-identity
-    and connection-identity lookups can't drift. Pass an existing client to avoid a second call."""
+    """The authenticated Databricks user — the single source for 'who am I' (the Postgres
+    connection identity). Pass an existing client to avoid a second call."""
     return (w or _ws()).current_user.me().user_name
-
-
-def resolve_demo_user() -> str:
-    """The in-scope planner identity for the demo — written to `user_access` (01) and used as the
-    query identity (04). Defaults to the CURRENT Databricks user so the OBO demo works for whoever
-    runs it; override with `DEMO_PLANNER_USER` in `.env` for a fixed shared-demo identity.
-
-    Both the generator and the verifier call this, so the ACL row and the query identity always
-    match — no hardcoded email to drift. NOTE: this is the *demo ACL* identity, which is distinct
-    from the Postgres *connection* identity (always the real OAuth caller — see `_conn_params`).
-    They coincide unless `DEMO_PLANNER_USER` is set; when the next phase switches to RLS on
-    `current_user()`, a shared demo must connect AS the user in `user_access`, so don't point
-    `DEMO_PLANNER_USER` at an email that isn't the connecting identity.
-    """
-    if settings.demo_planner_user:
-        return settings.demo_planner_user
-    return _current_user()
 
 
 def _conn_params() -> dict:

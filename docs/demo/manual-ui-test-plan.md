@@ -26,7 +26,7 @@ USE_STUBS=1 DATABRICKS_CONFIG_PROFILE=mfg-sc-agent uv run start-server
 - **Built (what ships):** `cd frontend && npm run build`, then open **http://localhost:8000/ui/** (the server serves `dist/`).
 
 **Pre-flight (once):**
-1. **Identity/scope** — check the sidebar footer: it should show your email and **no scope warning**. If it warns "data is scoped to <user>", set `DEMO_PLANNER_USER` in `.env` to that user (the hero data is scoped to the adhesives/safety planner). Without scope, the operational query returns no Henkel rows.
+1. **Identity** — the sidebar footer shows your email (OBO on the deployed app; your profile user locally). Operational reads run as the app service principal, so the hero scenario works for any signed-in user — no scope setup needed.
 2. **Seed prior decisions** (for the memory-recall beat) — visit once:
    **http://localhost:5173/api/_seed_demo_memories** (dev) or **http://localhost:8000/api/_seed_demo_memories** (built). Expect `{"written": [...3 items]}`. Idempotent.
 3. **Real-data sanity (skip if USE_STUBS):** open the **Inspect backend** drawer → "Peek inside" the pgvector card; you should see `quality_incidents` rows. If empty, either run the `data/` setup scripts or fall back to `USE_STUBS=1`.
@@ -38,7 +38,7 @@ USE_STUBS=1 DATABRICKS_CONFIG_PROFILE=mfg-sc-agent uv run start-server
 
 ## 1. Smoke checks
 
-- [ ] `curl -s localhost:8000/api/me` returns your email + `in_scope`.
+- [ ] `curl -s localhost:8000/api/me` returns your email.
 - [ ] Frontend loads; **TopNav** shows **Chat · Review · Lakebase**.
 - [ ] Chat is the default surface; the 5 suggestion chips render.
 - [ ] Switching tabs works; Review/Lakebase show sensible **empty states** before any run.
@@ -50,7 +50,7 @@ USE_STUBS=1 DATABRICKS_CONFIG_PROFILE=mfg-sc-agent uv run start-server
 This is the 2-minute run-of-show. Do it in order.
 
 **Step 1 — Trigger the exception (Chat).** Click the suggestion or type:
-> *Similar quality issues for Henkel, scoped to the product codes I can access, joined to on-hand inventory and open POs*
+> *Similar quality issues for Henkel, joined to on-hand inventory and open POs*
 
 - [ ] Live step progress streams (Routing → Running the operational query → Recalling prior decisions → Composing the recommendation).
 - [ ] The route resolves to **operational** (optionally + analytics).

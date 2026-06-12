@@ -45,8 +45,9 @@ npm --prefix frontend install
 npm --prefix frontend run dev          # open http://localhost:5173
 ```
 
-Local dev has no Apps proxy, so `/api/me` falls back to `DEMO_PLANNER_USER` (your `.env`) — which
-is also the in-scope operational identity, so the hero scenario works.
+Local dev has no Apps proxy, so `/api/me` falls back to your profile user (the Databricks CLI
+identity). Operational reads run as the app service principal, so the hero scenario works for any
+signed-in user.
 
 ## Build for deploy
 

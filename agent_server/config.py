@@ -68,11 +68,6 @@ class Settings(BaseModel):
         # any blank) as unset so the Analytics route degrades gracefully (genie_tool checks falsy).
         return "" if (v or "").strip().lower() in ("", "unset", "none") else v
 
-    # --- Demo (operational data) ---
-    # In-scope planner identity for the user_access ACL. Unset → the current Databricks user
-    # (so the OBO demo works for whoever runs it); set to a fixed email for a shared demo.
-    demo_planner_user: str | None = Field(default=None, alias="DEMO_PLANNER_USER")
-
     # --- LLM endpoints — two LLM callsites (router + planner).
     # CLAUDE.md anticipates per-tier sizing (fast/mid/strong) for cost; promoting to that
     # is a one-line .env change. The gather/retrieval agents use Vector Search / Genie /

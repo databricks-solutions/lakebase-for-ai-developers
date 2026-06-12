@@ -93,15 +93,14 @@ def analytics_node(state: AgentState) -> dict:
 
 def operational_node(state: AgentState) -> dict:
     question = state["question"]
-    user_id = state.get("user_id", "unknown")
     _substep("gather_operational", "Running operational query…")
     if _use_stubs():
-        result = query_operational_fake(question, user_id)
+        result = query_operational_fake(question)
         _substep("gather_operational", f"{len(result.rows)} matches")
         return {"operational_result": result}
     try:
         from agent_server.tools.operational_tool import query_operational_impl
-        result = query_operational_impl(question, user_id)
+        result = query_operational_impl(question)
         _substep("gather_operational", f"{len(result.rows)} matches")
         return {"operational_result": result}
     except Exception as exc:  # degrade, don't fail the run

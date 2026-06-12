@@ -277,8 +277,9 @@ Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `s
 - [ ] **Genie space** — `CAN VIEW` / run (share the space with the users/group)
 - [ ] **Vector Search index** — `SELECT` on `<uc_catalog>.<uc_schema>.knowledge_chunks_index`
 - [ ] **SQL warehouse** — `CAN USE` (Genie + operational queries execute as the user)
-- [ ] ❌ **No Lakebase grant needed** — the operational agent connects as the App SP and scopes
-      rows with an in-query access predicate (full per-user Lakebase RLS is a later phase).
+- [ ] ❌ **No Lakebase grant needed** — the operational agent connects as the App SP, so every
+      authenticated app user sees the same UC-governed data (no per-user row scoping; per-user
+      scoping in production would be Postgres RLS or an entitlements join, not an app-side ACL).
 
 ---
 

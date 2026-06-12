@@ -43,7 +43,7 @@ from agent_server.config import settings  # noqa: E402
 from data.operational._lakebase import connect  # noqa: E402
 
 _WRITEBACK_TABLES = ("approved_actions", "planning_parameters", "constraints")
-_OPERATIONAL_TABLES = ("quality_incidents", "inventory_current", "open_pos", "user_access")
+_OPERATIONAL_TABLES = ("quality_incidents", "inventory_current", "open_pos")
 
 
 def _ok(label: str) -> None:

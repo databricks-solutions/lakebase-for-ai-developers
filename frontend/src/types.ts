@@ -3,8 +3,6 @@ export interface Me {
   user_id: string | null;
   is_local: boolean;
   workspace_host: string;
-  demo_planner_user: string | null;
-  in_scope: boolean;
 }
 
 export interface ApprovalRequest {
