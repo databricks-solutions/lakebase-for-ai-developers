@@ -2,6 +2,11 @@
 
 *An agentic planning assistant with human-in-the-loop decisions, durable state, and full observability. One app, two audiences.*
 
+> **Canonical seeded scenario:** the IGBT / PM-IG1200 semiconductor-shortage narrative below is an
+> illustrative pitch; the demo's actual seeded data is a Henkel (SUP-001) / SKU-1001 adhesive
+> quality issue — adhesive cracking, on-hand 40, open POs ~800 (Henkel 500 + DuPont 300), Q4 2026.
+> See the README Tier 1/2/2b questions for the canonical test prompts.
+
 ---
 
 ## The use case

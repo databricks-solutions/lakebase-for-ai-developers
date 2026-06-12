@@ -29,6 +29,8 @@ app restarts). **All durable state lives on Lakebase (Postgres).** MLflow autolo
 Supervisor (router) → parallel Gather → Planner (fan-out per SKU/supplier) → Aggregate + Gate → [HITL interrupt()] → Commit
 ```
 
+End-to-end diagrams: [`docs/architecture.md` → End-to-end architecture](docs/architecture.md#end-to-end-architecture).
+
 The **gather phase** has three sibling retrieval/data agents:
 
 - **Operational — Lakebase.** Semantic similarity as *one predicate* in a governed relational
@@ -97,7 +99,10 @@ Mirror the reference template's `pyproject.toml`:
   their tables, pooling, and vector index; runtime OAuth DB credentials via the SDK. **Synced
   Tables** sync operational Delta tables → Lakebase for the operational joins.
 - **Genie:** Conversation API.
-- **Frontend:** Next.js (`e2e-chatbot-app-next`, cloned on demand by `start-app`).
+- **Frontend:** Vite + React + TypeScript SPA (committed in `frontend/`, built to `frontend/dist`,
+  served by the agent at `/ui`). Live dev: `npm --prefix frontend run dev` (Vite on :5173,
+  proxies `/api` + `/invocations` → :8000); `uv run start-server` (or its `start-app` alias)
+  serves the built SPA.
 
 ## Running locally vs. on Databricks (auth & config)
 

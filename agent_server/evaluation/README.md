@@ -63,6 +63,15 @@ Writes `memory_report.md` + `memory_results.json` (assertions, per-scenario span
 Needs Lakebase access — it does NOT need `start-server`. Drop the schema after with
 `DROP SCHEMA IF EXISTS scp_mem_validation CASCADE`.
 
+## Known gaps
+
+- **No operational-SQL-correctness scorer.** `scorers.py` covers `routing_correctness`,
+  `recommendation_grounded`, `escalation_correctness`, and the deterministic `gate_correctness` —
+  but not the hybrid operational SQL/result the architecture doc calls for scoring. With
+  `--real-data` provisioned, add a scorer that asserts the hero-scenario rows (Henkel `SUP-001` /
+  `SKU-1001`, on-hand 40 / open-PO 500, and out-of-scope access filtering). (Migrated from the
+  former `docs/follow-ups.md`; everything else in that list shipped.)
+
 ## Modules
 
 `dataset.py` (EVAL_RECORDS) · `scorers.py` (judges, gate, trace predicates + `TraceSummary`) ·

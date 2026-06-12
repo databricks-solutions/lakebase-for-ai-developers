@@ -1,8 +1,8 @@
 # data/ — WS2 (Operational data) + WS4 (demo dataset)
 
 > **Scaffold placeholder.** No data-gen code yet. This is the home for synthetic data
-> generation, the operational tables, the hybrid similarity+join query, and the seeded **Acme**
-> demo scenario.
+> generation, the operational tables, the hybrid similarity+join query, and the seeded **Apex
+> Industrial** demo scenario.
 
 > **Run it both ways.** Write data-gen / query code so the *same* file runs in the IDE (loads
 > `.env` + `DATABRICKS_CONFIG_PROFILE`) and in a Databricks notebook/job (ambient auth). Only
@@ -25,7 +25,7 @@
    vector similarity + access predicate (`product_code IN planner_acl`) + JOIN to
    `inventory ⨝ purchase_orders ⨝ supplier_status` resolve in ONE governed SQL statement. The
    agent should **return this SQL** for traceability.
-5. **Acme demo scenario** — seed deterministic rows so the canonical request reproduces.
+5. **Apex Industrial demo scenario** — seed deterministic rows so the canonical request reproduces.
 
 ## Skills & references
 Vendored `lakebase-setup`, `agent-memory`, `create-tools`, `add-tools`; plus `databricks-lakebase`.

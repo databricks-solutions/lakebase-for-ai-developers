@@ -153,7 +153,7 @@ That hits the router, all three gather engines, HITL, checkpoint durability, and
 | [`data/`](data/) | **WS2/WS3/WS4** — `knowledge/` PDF → Delta → VS index pipeline; `genie/` operational schema + programmatic space creation; (WS2) synthetic operational data + pgvector hybrid query land here |
 | [`frontend/`](frontend/) | Claude-style chat UI — React + Vite SPA (dev on `:5173`, proxies to backend `:8000`; built SPA served at `/ui`) |
 | [`scripts/`](scripts/) | setup/seed + skills installer |
-| [`docs/architecture.md`](docs/architecture.md) | Multi-agent design, topology, pgvector/VS split |
+| [`docs/architecture.md`](docs/architecture.md) | Multi-agent design, topology, pgvector/VS split, [end-to-end architecture diagrams](docs/architecture.md#end-to-end-architecture) |
 | [`docs/storyboard.md`](docs/storyboard.md) | The 5 scenarios + persona |
 | [`docs/sprint-plan.md`](docs/sprint-plan.md) | DoD, Must/Nice, workstreams, timeline, risks |
 | [`docs/references.md`](docs/references.md) | All code/demo/doc links |
@@ -170,5 +170,6 @@ That hits the router, all three gather engines, HITL, checkpoint durability, and
 
 Lean heavily on the
 [`agent-langgraph-advanced`](https://github.com/databricks/app-templates/tree/main/agent-langgraph-advanced)
-template (LangGraph + Lakebase memory + MLflow + Next.js, ships its own skills). Full link list
-in [`docs/references.md`](docs/references.md).
+template (LangGraph + Lakebase memory + MLflow; the template's own UI is Next.js — **this repo's
+frontend is Vite + React**; ships its own skills). Full link list in
+[`docs/references.md`](docs/references.md).
