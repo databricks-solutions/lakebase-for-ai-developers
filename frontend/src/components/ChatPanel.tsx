@@ -2,14 +2,39 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { sendFeedback } from "../api";
 import type { ChatMessage } from "../types";
 
-// One per capability: Analytics (Genie), Knowledge (VS), Operational (pgvector hybrid),
-// and two cross-conversation long-term-memory recalls.
-const SUGGESTIONS = [
-  "Total unfulfilled demand by product code for Q4/Q1?",
-  "Have we seen a disruption like the PrecisionBond recall before?",
-  "Similar quality issues for Henkel, scoped to the product codes I can access, joined to on-hand inventory and open POs",
-  "What did we decide about the Acme delay yesterday?",
-  "Continue this morning's escalation",
+// The README's Tier 1 / Tier 2 demo questions, verbatim (the seed-data anchors — Henkel,
+// SKU-1001, Q4 2026 — must match exactly). Tier 1 verifies single-engine routing; Tier 2 is
+// the multi-agent hero loop that pauses for HITL approval.
+const QUESTION_GROUPS: { tier: string; blurb: string; items: { q: string; route: string }[] }[] = [
+  {
+    tier: "Tier 1 · single-engine routing",
+    blurb: "Verify the router picks the right agent.",
+    items: [
+      { q: "What is the total open PO quantity by supplier for Q4 2026?", route: "Analytics · Genie" },
+      { q: "What do our Caterpillar contracts say about late-delivery penalties?", route: "Knowledge · Vector Search" },
+      { q: "Find similar past quality incidents to Henkel's SKU-1001 adhesive cracking.", route: "Operational · Lakebase" },
+      { q: "Which suppliers are currently flagged at risk?", route: "Analytics · Genie" },
+    ],
+  },
+  {
+    tier: "Tier 2 · multi-agent + HITL approval",
+    blurb: "The hero loop — pauses for your approval, then commits.",
+    items: [
+      { q: "Henkel's SKU-1001 has recurring adhesive cracking — show me similar past cases joined to on-hand inventory and open POs, and recommend a mitigation.", route: "Operational + Analytics" },
+      { q: "Nucor announced a carbon-steel price increase. Find related market-event notes and similar past incidents, and recommend whether to pre-buy.", route: "Knowledge + Operational" },
+      { q: "Recommend a mitigation for the SKU-1001 shortage given the Henkel risk, and give me total open POs by supplier for Q4.", route: "Operational + Analytics" },
+    ],
+  },
+  {
+    tier: "Tier 2b · write-back to Lakebase",
+    blurb: "Approve / edit / hold each action on the Review tab — commits write rows to Lakebase.",
+    items: [
+      { q: "Henkel SKU-1001 keeps cracking — give me a full containment plan: hold the on-hand lot, quarantine the incoming PO, tighten incoming inspection, and hold Henkel until they're re-validated.", route: "all 3 tables" },
+      { q: "Henkel SKU-1001 is failing the adhesion test — quarantine the incoming 500-unit PO and bridge-source a buffer from DuPont.", route: "approved_actions" },
+      { q: "Given the recurring SKU-1001 quality failures, raise the incoming-inspection level and bump safety stock until the defect is contained.", route: "planning_parameters" },
+      { q: "Put a quality hold on Henkel/SUP-001 for SKU-1001 until they pass re-validation, and prioritize the EV inverter program for the constrained on-hand.", route: "constraints" },
+    ],
+  },
 ];
 
 export function ChatPanel({
@@ -85,16 +110,29 @@ export function ChatPanel({
 
 function Welcome({ onPick }: { onPick: (s: string) => void }) {
   return (
-    <div style={{ textAlign: "center", padding: "var(--space-8) 0", animation: "fade-up var(--dur-slow) var(--ease-out)" }}>
-      <div className="eyebrow">Supply-Chain Planner Copilot</div>
-      <h1 style={{ margin: "10px 0 8px" }}>How can I help you plan today?</h1>
-      <p style={{ color: "var(--fg-2)", maxWidth: 520, margin: "0 auto var(--space-6)" }}>
-        Ask about supplier risk, quality issues, inventory and open POs. I route across pgvector,
-        Genie and Vector Search, then propose an action for your approval.
-      </p>
-      <div data-tour="suggestions" style={{ display: "grid", gap: 10, maxWidth: 620, margin: "0 auto" }}>
-        {SUGGESTIONS.map((s) => (
-          <button key={s} onClick={() => onPick(s)} style={suggestionBtn}>{s}</button>
+    <div style={{ padding: "var(--space-8) 0", animation: "fade-up var(--dur-slow) var(--ease-out)" }}>
+      <div style={{ textAlign: "center" }}>
+        <div className="eyebrow">Supply-Chain Planner Copilot</div>
+        <h1 style={{ margin: "10px 0 8px" }}>How can I help you plan today?</h1>
+        <p style={{ color: "var(--fg-2)", maxWidth: 520, margin: "0 auto var(--space-6)" }}>
+          Ask about supplier risk, quality issues, inventory and open POs. I route across pgvector,
+          Genie and Vector Search, then propose an action for your approval. Pick an example to start:
+        </p>
+      </div>
+      <div data-tour="suggestions" style={{ display: "grid", gap: "var(--space-5)", maxWidth: 620, margin: "0 auto" }}>
+        {QUESTION_GROUPS.map((g) => (
+          <div key={g.tier} style={{ display: "grid", gap: 8 }}>
+            <div>
+              <div className="eyebrow">{g.tier}</div>
+              <p style={{ color: "var(--fg-3)", fontSize: "var(--fs-body-sm)", margin: "2px 0 0" }}>{g.blurb}</p>
+            </div>
+            {g.items.map((it) => (
+              <button key={it.q} onClick={() => onPick(it.q)} style={suggestionBtn}>
+                <span style={routeChip}>{it.route}</span>
+                <span>{it.q}</span>
+              </button>
+            ))}
+          </div>
         ))}
       </div>
     </div>
@@ -243,6 +281,11 @@ const suggestionBtn: CSSProperties = {
   font: "inherit", textAlign: "left", padding: "12px 16px", borderRadius: "var(--radius-lg)",
   border: "1px solid var(--border)", background: "var(--bg-canvas)", color: "var(--fg-1)",
   cursor: "pointer", boxShadow: "var(--shadow-sm)",
+  display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start",
+};
+const routeChip: CSSProperties = {
+  fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em",
+  padding: "2px 8px", borderRadius: "var(--radius-pill)", background: "var(--bg-subtle)", color: "var(--fg-3)",
 };
 const peekBtn: CSSProperties = {
   font: "inherit", padding: "8px 16px", borderRadius: "var(--radius-pill)",
