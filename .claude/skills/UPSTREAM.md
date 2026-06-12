@@ -37,6 +37,13 @@ Vendored copies **drift** from upstream — refresh before the demo (see below).
   `retrieving-mlflow-traces`, `querying-mlflow-metrics`, `mlflow-onboarding`,
   `searching-mlflow-docs`, `mlflow-agent`.
 
+## Repo-authored skills (not vendored, no SHA)
+
+Some skills here are written for this repo, not pulled from upstream — currently
+`sync-architecture-docs`. They have **no pinned SHA** and are **not** touched by the refresh
+below (the `rsync --delete` loops target only the named upstream skill dirs, so a repo-authored
+directory is safe). Edit them like any other repo file. See `README.md` → "Repo-authored skills".
+
 ## Refresh procedure
 
 To re-pull the latest upstream versions (and update the SHAs above):

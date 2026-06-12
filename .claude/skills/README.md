@@ -59,6 +59,16 @@ From [`mlflow/skills`](https://github.com/mlflow/skills) @ `b90eca1`:
 (chat-session/trace retrieval, metrics, onboarding, docs search) are available via
 `npx skills add mlflow/skills`.
 
+## 4. Repo-authored skills (NOT vendored)
+
+Written for **this** repo — not copied from any upstream, so they are **never** overwritten by the
+`UPSTREAM.md` refresh (the refresh `rsync`s only the named upstream skill dirs above). Edit these
+freely; they have no pinned SHA.
+
+| Skill | What it covers |
+|-------|----------------|
+| `sync-architecture-docs` | Keep `docs/architecture.md` (the 4 Mermaid diagrams) + the READMEs/`CLAUDE.md` in sync with the code; reconcile the known stale-doc patterns; verify with greps + Mermaid validity. Run after topology/tool/schema/auth/frontend changes. |
+
 ---
 
 See [`UPSTREAM.md`](UPSTREAM.md) for exact SHAs + refresh steps, `scripts/install-skills.sh`
