@@ -220,9 +220,9 @@ The concrete wiring:
   (wired in `start_server._lifespan`, ahead of the library's lifespan) so the SP — not a developer's
   local run — owns the hard-coded `agent_server` schema; see *The durable `agent_server` schema*
   below.
-- **[`scripts/ensure_lakebase_project.py`](../scripts/ensure_lakebase_project.py)** — `make deploy`
-  ensures the Lakebase project exists (idempotent) via `make lakebase-project` before deploying, so
-  the `postgres` resource has a project/branch/database to bind to.
+- **[`scripts/ensure_lakebase_project.py`](../scripts/ensure_lakebase_project.py)** — `deploy.sh`
+  phase 1 ensures the Lakebase project exists (idempotent) before deploying, so the `postgres`
+  resource has a project/branch/database to bind to.
 
 The role-registration fallback is now **rare** (the resource handles it on every deploy). If the
 role ever hasn't propagated when the seed runs, the documented manual path is the **SQL**
@@ -265,12 +265,12 @@ no superuser grant on `public`, no `CREATE ON SCHEMA public` needed.
 
 ## Deploy-time requirements (recap)
 
-- **Databricks CLI ≥ v0.294** (older versions treat the `postgres` resource key as an unknown
-  field). See `docs/DEPLOYMENT_GUIDE.md` §2.
+- **Databricks CLI ≥ v0.295** (`deploy.sh` enforces it in preflight; 0.294 first recognized the
+  `postgres` resource key, older versions treat it as an unknown field). See `docs/DEPLOYMENT_GUIDE.md` §2.
 - The **deployer needs `CAN MANAGE` on the Lakebase project** to attach the `postgres` resource. See
   `docs/DEPLOYMENT_GUIDE.md` §6.A.
-- The `postgres` resource binds to a **pre-existing** project/branch/database — `make deploy` ensures
-  it via `make lakebase-project` (`scripts/ensure_lakebase_project.py`) before deploying.
+- The `postgres` resource binds to a **pre-existing** project/branch/database — `deploy.sh` phase 1
+  ensures it (`scripts/ensure_lakebase_project.py`) before deploying.
 
 ---
 
@@ -307,14 +307,18 @@ member of `databricks_superuser` and **could not** drop the orphaned schema.
    This is the interim fix applied here: `LAKEBASE_AGENT_MEMORY_SCHEMA` was pointed at a freed name
    (`supply_chain_planner_memory`) so the live SP creates + owns it. *Caveat:* this only relocates the
    future orphan — the next recreate orphans the new name.
-4. **(Robust, not yet implemented) Own the memory objects with a durable, app-independent role.**
-   The Lakebase-eng-validated pattern (Som Natarajan): a **headless `NOLOGIN INHERIT` group role**
-   created **via SQL** (`databricks_create_role`, so the creator keeps ADMIN OPTION) owns the objects;
-   each app SP is `GRANT`ed membership. A new SP just needs re-adding to the group — no orphan, no
-   reassignment. *Open complexity:* the checkpointer/store create tables as the connecting SP (owned
-   by the SP, not the group) unless we make them create as the group role; and the group-owns pattern
-   only works for SQL-created roles, not UI/SDK-created ones (there `cloud_admin` is the grantor).
-   This is the candidate durable hardening to iterate on.
+4. **(Durable group-role ownership — STRUCTURALLY BLOCKED today, do not attempt.)** The tempting
+   fix is a headless `NOLOGIN INHERIT` group role that owns the objects, with each app SP granted
+   membership (a new SP just re-joins the group — no orphan). **It does not work on Lakebase as of
+   2026-06** and was deliberately *not* implemented: (a) the checkpointer/store create their tables
+   **as the connecting SP**, so for the group to own them you'd have to `SET ROLE <group>` before
+   every DDL — and **`SET ROLE` is unsupported on Lakebase** (role flag `set=F`; confirmed
+   apa-lakebase, Som Natarajan); (b) the Lakebase Data API (PostgREST) **does not support group-role
+   auth** (JIRA LKB-9339). With no `SET ROLE`, neither the SP nor the (non-superuser) deployer can
+   `ALTER … OWNER`/`REASSIGN` a foreign-owned schema either. So the robust strategy is **not** durable
+   ownership but **prevention (1–2) + a loud preflight (below)** — which is what every FE demo
+   (inventory-intelligence, ontobricks, devhub, the reference template) converges on. Revisit only if
+   Lakebase ships `SET ROLE` / declarative role IaC.
 
 ### Recovery when already orphaned (non-superuser deployer)
 - **Point the new SP at a fresh schema** and let it create+own it (cheapest; the orphan lingers,
@@ -326,10 +330,15 @@ member of `databricks_superuser` and **could not** drop the orphaned schema.
   objects are stranded; **file an ES/Support ticket** (only `cloud_admin` can drop them).
 
 ### Why the originally-planned "grant_app_sp reassigns ownership" hardening was dropped
-It assumed the deployer is a Lakebase superuser. On a managed workspace the deployer is **not** — so a
-seed-time `ALTER OWNER`/`REASSIGN` of a foreign-owned schema fails. The realistic hardening is
-prevention (1–4 above) plus a **loud preflight** (detect a memory/write-back schema owned by a
-foreign principal and fail with remediation, instead of letting the app silently crash-loop).
+It assumed the deployer is a Lakebase superuser. On a managed workspace the deployer is **not**:
+`databricks_superuser` is `NOLOGIN` with `SET ROLE` disabled and **cannot `ALTER OWNER`/`DROP`/
+`REASSIGN` objects owned by another role** (confirmed JIRA LKB-6733). So a seed-time `ALTER OWNER`/
+`REASSIGN` of a foreign-owned schema fails. The realistic hardening is prevention (1–2 above) plus a
+**loud preflight** — and that preflight is now **implemented**: `agent_server.operational_db`'s
+`_ensure_role_owned_schema()` detects a memory / write-back / durable schema owned by a foreign
+principal and **fails loud at startup with the exact GRANT/DROP remediation** (memory + write-back
+are fatal; the durable `agent_server` schema degrades — background mode only), instead of letting the
+app silently crash-loop on `permission denied`.
 
 ---
 

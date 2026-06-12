@@ -67,6 +67,26 @@ def _find_existing_space_id(w: WorkspaceClient, title: str) -> str | None:
     return None
 
 
+def _grant_consumer_group(w: WorkspaceClient, space_id: str, group: str) -> None:
+    """Best-effort: grant a workspace group CAN_RUN on the space so end users can query it via OBO
+    without a per-user share. Uses PATCH (additive — won't wipe existing ACLs). Never fatal to the
+    seed: a failure here (deployer lacks CAN MANAGE on the space, or the group doesn't exist) just
+    prints a manual-fallback note. With OBO, the *user's* space ACL is what gates the query, so this
+    is what makes the Analytics route work for arbitrary signed-in users."""
+    try:
+        w.api_client.do(
+            "PATCH",
+            f"/api/2.0/permissions/genie/{space_id}",
+            body={"access_control_list": [{"group_name": group, "permission_level": "CAN_RUN"}]},
+        )
+        print(f"✓ Granted CAN_RUN to group {group!r} — its members can query the space via OBO")
+    except Exception as exc:  # noqa: BLE001 — best-effort; needs CAN MANAGE on the space
+        print(
+            f"⚠ Could not grant CAN_RUN to group {group!r}: {exc}\n"
+            f"  Share the space with that group manually (Genie space → Share; needs CAN MANAGE)."
+        )
+
+
 def main() -> None:
     cfg = SUPPLY_CHAIN_GENIE_SPACE
     print(f"Genie space     : {cfg.display_name}")
@@ -75,25 +95,28 @@ def main() -> None:
 
     w = WorkspaceClient()
 
-    existing = _find_existing_space_id(w, cfg.display_name)
-    if existing:
-        print(f"\n✓ Genie space already exists: space_id={existing}")
-        print(f"\nAdd to .env:\n  GENIE_SPACE_ID={existing}")
-        return
+    space_id = _find_existing_space_id(w, cfg.display_name)
+    if space_id:
+        print(f"\n✓ Genie space already exists: space_id={space_id}")
+    else:
+        warehouse_id = _resolve_warehouse_id(w)
+        serialized = cfg.build_serialized_space()
+        print(f"\nCreating space '{cfg.display_name}'...")
+        space = w.genie.create_space(
+            warehouse_id=warehouse_id,
+            title=cfg.display_name,
+            description=cfg.description,
+            serialized_space=serialized,
+        )
+        space_id = space.space_id
+        print(f"\n✓ Created: space_id={space_id}")
 
-    warehouse_id = _resolve_warehouse_id(w)
-    serialized = cfg.build_serialized_space()
+    # Optionally share with a consumer group so OBO end users can query it (idempotent; additive).
+    if settings.genie_consumer_group:
+        _grant_consumer_group(w, space_id, settings.genie_consumer_group)
 
-    print(f"\nCreating space '{cfg.display_name}'...")
-    space = w.genie.create_space(
-        warehouse_id=warehouse_id,
-        title=cfg.display_name,
-        description=cfg.description,
-        serialized_space=serialized,
-    )
-
-    print(f"\n✓ Created: space_id={space.space_id}")
-    print(f"\nAdd to .env:\n  GENIE_SPACE_ID={space.space_id}")
+    # Machine-readable line the deploy script greps to auto-wire genie_space_id and redeploy.
+    print(f"\nAdd to .env:\n  GENIE_SPACE_ID={space_id}")
 
 
 if __name__ == "__main__":

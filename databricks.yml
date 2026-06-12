@@ -46,7 +46,7 @@ variables:
   # --- Unity Catalog: the Genie/operational Delta source + the Knowledge volume & VS index. ---
   uc_catalog:
     description: Catalog holding the operational Delta tables, Knowledge volume, VS index, and trace schema. Must already exist and be writable by the deployer.
-    default: main
+    default: serverless_stable_yau46e_catalog
   uc_schema:
     description: Schema (within uc_catalog) for the operational Delta tables + Knowledge corpus.
     default: supply_chain_planner
@@ -75,11 +75,21 @@ variables:
 
   # --- Analytics (Genie) — carve-out: created by the seed job, then set here + redeploy. ---
   genie_space_id:
-    # Sentinel default, NOT empty: DABs drops empty-string env values, and Apps then rejects the
-    # name-only entry ("Must specify environment variable source"). config.py treats "unset" as
-    # no-Genie (the Analytics route degrades gracefully). Set the real id after the seed creates the
-    # space, then redeploy — a real id overrides the sentinel.
-    description: Genie space id. Defaults to the "unset" sentinel; set the real id after the seed job creates the space.
+    # Feeds the `genie-space` app resource (resources.apps...resources below); the app's
+    # GENIE_SPACE_ID env reads it back via `value_from: "genie-space"` (NOT a direct ${var}), so a
+    # real id is required — the resource can't be created from a sentinel. Set the id the seed job
+    # prints, then redeploy. (from-scratch bootstrap — space has no id until the seed runs — is a
+    # known follow-up; see the deploy.sh genie_wire_up patch.)
+    description: Genie space id — feeds the genie-space app resource; set the id the seed job prints.
+    default: "01f16128125d1d11897c8267c4e27be2"
+  genie_space_name:
+    description: Genie space display name (the genie-space app-resource label; matches the seed's title).
+    default: "Supply-Chain Planner — Analytics"
+  genie_consumer_group:
+    # Optional: a workspace group the seed grants CAN_RUN on the Genie space, so end users can query
+    # it via OBO without a per-user share. "unset" (the default) skips the grant — share it in the UI
+    # later, or pass deploy.sh --genie-consumer-group <name>. Needs CAN MANAGE on the space (deployer).
+    description: Group granted CAN_RUN on the Genie space at seed time (OBO consumers). "unset" = skip.
     default: "unset"
 
   # --- Knowledge (Mosaic AI Vector Search). ---
@@ -193,7 +203,10 @@ resources:
           - name: UC_SCHEMA
             value: ${var.uc_schema}
           - name: GENIE_SPACE_ID
-            value: ${var.genie_space_id}
+            # Resolved from the `genie-space` app resource (below), same idiom as MLFLOW_EXPERIMENT_ID.
+            # A bare `value: ${var.genie_space_id}` deploys name-only/empty when the var is the sentinel,
+            # which silently disabled the Analytics route; value_from a resource always injects the id.
+            value_from: "genie-space"
           - name: DATABRICKS_EMBEDDING_ENDPOINT
             value: ${var.embedding_endpoint}
 
@@ -229,6 +242,15 @@ resources:
             branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
             database: projects/${var.lakebase_project}/branches/${var.lakebase_branch}/databases/${var.lakebase_database_resource}
             permission: CAN_CONNECT_AND_CREATE
+        # Genie (Analytics agent). Binding the resource does two things: grants the App SP CAN_RUN on
+        # the space (for the non-OBO/eval fallback) AND exposes the space_id to the app env via
+        # `value_from: "genie-space"` above. End-user queries run OBO (scope dashboards.genie), so the
+        # user — not the SP — is what UC governs at query time.
+        - name: genie-space
+          genie_space:
+            name: ${var.genie_space_name}
+            space_id: ${var.genie_space_id}
+            permission: CAN_RUN
 
   # Setup-and-seed job — loads the demo dataset. Run it for demo samples; skip it to bring your
   # own data. Two independent chains after the schema bootstrap: operational (Lakebase) + knowledge
@@ -248,7 +270,7 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/00_bootstrap_schemas.py
-              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","APP_NAME":"${var.app_name}"}'
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","APP_NAME":"${var.app_name}","GENIE_CONSUMER_GROUP":"${var.genie_consumer_group}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---

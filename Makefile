@@ -1,22 +1,30 @@
-# One-shot deploy for the Supply-Chain Planner Copilot (DABs).
+# Deploy for the Supply-Chain Planner Copilot. All deploy logic lives in scripts/deploy.sh
+# (idempotent, cold-start-safe, graceful degradation) — these targets are thin wrappers.
 #
-#   make deploy PROFILE=<cli-profile>                  # build SPA, deploy bundle, seed demo data
-#   make deploy PROFILE=<cli-profile> SEED=false       # bring your own data (skip the seed job)
-#   make deploy PROFILE=<cli-profile> TARGET=demo      # clean prod-style names (default: dev)
-#   make build   / make validate / make seed / make destroy
+#   make deploy      PROFILE=<p>                       # full one-shot: build, deploy, seed, Genie, verify
+#   make deploy      PROFILE=<p> SEED=false            # bring your own data (skip the seed job)
+#   make deploy      PROFILE=<p> TARGET=demo           # clean prod-style names (default: dev)
+#   make deploy      PROFILE=<p> GENIE_GROUP=<group>   # grant a workspace group CAN_RUN on the Genie space (OBO)
+#   make redeploy    PROFILE=<p>                       # FAST dev loop: agent-server code change → deploy + restart
+#   make redeploy-ui PROFILE=<p>                       # FAST dev loop: frontend change → build + deploy + restart
+#   make build / validate / seed / destroy
 #
 # Prereqs (one-time, see docs/DEPLOY.md): a CLI profile pointed at your workspace, a writable UC
-# catalog, Node 18+ for the SPA build, and the Databricks CLI >= 0.294 (the `postgres` app resource
-# + autoscaling Lakebase project APIs need it). The Lakebase autoscaling project is now created
-# automatically by `make lakebase-project` (the first step of `make deploy`) — no manual setup.
+# catalog, Node 18+ for the SPA build, and the Databricks CLI >= 0.295 (the `postgres` app resource
+# + autoscaling Lakebase project APIs need it). The Lakebase project, seed, and Genie wiring are all
+# handled automatically by scripts/deploy.sh — no manual prereq steps.
+#
+# Optional bundle-variable overrides (no need to edit databricks.yml per workspace), e.g.:
+#   make deploy PROFILE=<p> VARS="uc_catalog=my_catalog lakebase_project=my-proj"
 
 TARGET ?= dev
 SEED   ?= true
+VARS   ?=
+GENIE_GROUP ?=
 
-# Optional bundle-variable overrides (no need to edit databricks.yml per workspace), e.g.:
-#   make deploy PROFILE=<p> VARS="uc_catalog=serverless_stable_96t79b_catalog lakebase_project=my-proj"
-VARS ?=
-VAR_FLAGS := $(foreach v,$(VARS),--var $(v))
+VAR_FLAGS  := $(foreach v,$(VARS),--var $(v))
+SEED_FLAG  := $(if $(filter false,$(SEED)),--no-seed,)
+GENIE_FLAG := $(if $(GENIE_GROUP),--genie-consumer-group $(GENIE_GROUP),)
 
 ifndef PROFILE
 PROFILE := $(DATABRICKS_CONFIG_PROFILE)
@@ -26,7 +34,22 @@ _require_profile:
 	@if [ -z "$(PROFILE)" ]; then \
 	  echo "ERROR: set PROFILE=<cli-profile> (or export DATABRICKS_CONFIG_PROFILE)"; exit 1; fi
 
-# Build the React SPA into frontend/dist (bundle ships it via sync.include).
+# Full one-shot deploy. scripts/deploy.sh runs the cold-start preflight, ensures the Lakebase
+# project, builds the SPA, deploys + starts the app, seeds, auto-wires Genie, and verifies.
+deploy: _require_profile
+	./scripts/deploy.sh --profile $(PROFILE) --target $(TARGET) $(SEED_FLAG) $(GENIE_FLAG) $(VAR_FLAGS)
+
+# FAST dev loops — push code + restart the app ONLY (no seed/Genie/lakebase steps). Stays on the
+# same target/app and never deletes it, so the SP and its Lakebase schemas persist. Safe all day.
+#   redeploy    → agent-server (Python) change: bundle deploy + bundle run     (~30-60s)
+#   redeploy-ui → frontend change: npm build + bundle deploy + bundle run
+redeploy: _require_profile
+	./scripts/deploy.sh --profile $(PROFILE) --target $(TARGET) --app-only $(VAR_FLAGS)
+
+redeploy-ui: _require_profile
+	./scripts/deploy.sh --profile $(PROFILE) --target $(TARGET) --app-only --build-frontend $(VAR_FLAGS)
+
+# Build the React SPA into frontend/dist (the bundle ships it via sync.include).
 build:
 	npm --prefix frontend ci
 	npm --prefix frontend run build
@@ -34,43 +57,11 @@ build:
 validate: _require_profile
 	databricks bundle validate -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 
-# Get-or-create the Lakebase autoscaling project (idempotent) and wait until it's AVAILABLE, so a
-# fresh workspace is truly one-shot — no manual `databricks postgres create-project` prereq. The
-# `postgres` app resource + the synced tables both target this project, so it must exist BEFORE
-# `bundle deploy`. PROFILE flows through as DATABRICKS_CONFIG_PROFILE for the SDK credential chain.
-# If you point the bundle at a non-default project (VARS="lakebase_project=<id>"), pass the same id
-# here so the project that gets created matches: make deploy ... LAKEBASE_PROJECT=<id> VARS="...".
-lakebase-project: _require_profile
-	DATABRICKS_CONFIG_PROFILE=$(PROFILE) LAKEBASE_PROJECT=$(LAKEBASE_PROJECT) uv run python scripts/ensure_lakebase_project.py
-
-# Build + deploy the App/experiment, then seed demo data unless SEED=false.
-# NOTE: `bundle deploy` only uploads source + creates the app OBJECT (the shell). It does NOT
-# create an app DEPLOYMENT — that needs `bundle run <app-key>` (= apps deploy), which points the
-# app at the source and makes it live. Without this the app shows "No source code / Unavailable".
-deploy: _require_profile lakebase-project build
-	databricks bundle deploy -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
-	@echo "==> deploying the app (creates the active deployment; bundle deploy only made the shell)"
-	databricks bundle run supply_chain_planner -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
-	@if [ "$(SEED)" = "true" ]; then \
-	  echo "==> seeding demo data (SEED=true)"; \
-	  $(MAKE) seed PROFILE=$(PROFILE) TARGET=$(TARGET); \
-	else \
-	  echo "==> skipping seed (SEED=false) — point uc_catalog/uc_schema at your own data"; \
-	fi
-	@echo "==> done."
-	@if [ "$(SEED)" = "true" ]; then \
-	  echo "    NEXT (one-time, to wire the Analytics/Genie route): the seed's create_genie_space task"; \
-	  echo "    printed a Genie space id. Grab it (Jobs UI -> create_genie_space task -> Output), then"; \
-	  echo "    redeploy the app with it set:"; \
-	  echo "      make deploy PROFILE=$(PROFILE) SEED=false VARS=\"$(VARS) genie_space_id=<the-id>\""; \
-	  echo "    Until set, every route works except Genie. See docs/DEPLOYMENT_GUIDE.md sec.5."; \
-	fi
-
 # Load the demo dataset (operational + pgvector + Genie + Knowledge/Vector-Search).
 seed: _require_profile
-	databricks bundle run setup_and_seed -t $(TARGET) --profile $(PROFILE)
+	databricks bundle run setup_and_seed -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 
 destroy: _require_profile
 	databricks bundle destroy -t $(TARGET) --profile $(PROFILE)
 
-.PHONY: _require_profile build validate lakebase-project deploy seed destroy
+.PHONY: _require_profile deploy redeploy redeploy-ui build validate seed destroy

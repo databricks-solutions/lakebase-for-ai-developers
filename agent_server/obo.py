@@ -16,8 +16,11 @@ background task without a forwarded request) so those paths keep working.
 from __future__ import annotations
 
 import contextvars
+import logging
 import os
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 _obo_token: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "obo_access_token", default=None
@@ -59,7 +62,19 @@ def obo_workspace_client():
     try:
         from databricks.sdk import WorkspaceClient
 
+        # auth_type="pat" is load-bearing on Databricks Apps: the runtime injects the app SP's
+        # DATABRICKS_CLIENT_ID/SECRET (auth group "oauth") into the env, so passing token= (group
+        # "pat") leaves the SDK with two configured auth methods and Config._validate() raises
+        # "more than one authorization method configured". Pinning auth_type short-circuits that
+        # validation and forces the user's PAT — without it the OBO client construction throws,
+        # we silently fall back to the app SP, and Genie/UC reads run as the SP (PERMISSION_DENIED).
         host = workspace_host()
-        return WorkspaceClient(host=host, token=token) if host else WorkspaceClient(token=token)
-    except Exception:  # noqa: BLE001
+        return (
+            WorkspaceClient(host=host, token=token, auth_type="pat")
+            if host
+            else WorkspaceClient(token=token, auth_type="pat")
+        )
+    except Exception as exc:  # noqa: BLE001 — log, don't mask: a silent fallback to the app SP here
+        # is exactly what hid this bug. Surface it so an auth misconfig is visible in app logs.
+        logger.warning("OBO WorkspaceClient construction failed; falling back to app SP: %s", exc)
         return None

@@ -35,14 +35,32 @@ simplest is to edit the `default:`s in `databricks.yml` for your workspace once.
 ## Deploy
 
 ```bash
-make deploy PROFILE=<p>                 # build SPA, deploy bundle, seed demo data (default)
+make deploy PROFILE=<p>                 # full one-shot (build, deploy, seed, auto-wire Genie, verify)
 make deploy PROFILE=<p> SEED=false      # bring your own data — skip seeding
 make deploy PROFILE=<p> TARGET=demo     # clean prod-style resource names (default target: dev)
+make deploy PROFILE=<p> GENIE_GROUP=<g> # also grant a workspace group CAN_RUN on the Genie space (OBO)
 ```
 
-`make deploy` runs three things: `npm run build` (SPA → `frontend/dist`, shipped via
-`sync.include`), `databricks bundle deploy`, then `databricks bundle run setup_and_seed` unless
-`SEED=false`. Raw equivalents are in the header of `databricks.yml`.
+`make deploy` is a thin wrapper over [`scripts/deploy.sh`](../scripts/deploy.sh) — one idempotent,
+cold-start-safe engine. Phases: **0** cold-start preflight (CLI ≥ 0.295, auth, catalog exists,
+node/uv) → **1** ensure the Lakebase project → **2** build the SPA → **3** `bundle deploy` → **4**
+`bundle run` (the active deployment — `bundle deploy` only makes the shell) → **5** seed → **6**
+Genie wire-up (create/find the space, optional group grant, capture the id, redeploy) → **7** verify
++ print the app URL. Critical phases fail fast; seed/Genie/verify **degrade gracefully** so a partial
+failure still leaves a working core app.
+
+### Fast dev loop (after the first full deploy)
+
+Iterating on code? Skip the seed/Genie/lakebase steps — just push code and restart the app:
+
+```bash
+make redeploy    PROFILE=<p>   # agent-server (Python) change: bundle deploy + bundle run (~30-60s)
+make redeploy-ui PROFILE=<p>   # frontend change: npm build + bundle deploy + bundle run
+```
+
+These stay on the same target/app and **never delete it**, so the app SP and its Lakebase schemas
+persist (only app *delete + recreate* orphans schemas — see
+[`lakebase-apps-permissions.md`](lakebase-apps-permissions.md)).
 
 ## The data toggle
 
@@ -52,18 +70,30 @@ make deploy PROFILE=<p> TARGET=demo     # clean prod-style resource names (defau
   `SEED=false`. The app reads whatever the variables point at; nothing is overwritten. (Your
   tables should match the operational schema the agent expects — see `data/genie/genie_config.py`.)
 
-## Two post-deploy steps (carve-outs)
+## What used to be manual is now automatic
 
-These can't be clean DABs resources, so they're explicit one-time follow-ups:
+Two follow-ups that used to be hand-run are folded into `deploy.sh`:
 
-1. **Grant the App's service principal a Lakebase Postgres role** so the app can connect. The app
-   SP only exists after the first deploy. Run:
-   ```bash
-   scripts/grant_app_sp.sh <p>      # registers the SP's Lakebase role + GRANTs (see the script)
-   ```
-2. **Wire the Genie space.** The seed job's `create_genie_space` task creates a Genie space and
-   prints its id. Set `genie_space_id` to that value and re-run `make deploy` so the Analytics
-   agent binds to it. (Until then the Analytics agent degrades gracefully — other routes work.)
+- **App service-principal Lakebase access** — the native `postgres` app resource grants the SP
+  `CONNECT` + `CREATE`, the SP self-creates + owns its memory/write-back schemas at startup, and the
+  seed's `grant_app_sp` task adds the `SELECT` grant on the synced `public` tables. No manual
+  `grant_app_sp.sh` step (that script is gone).
+- **Genie wiring** — `deploy.sh` creates/finds the space, captures its id, patches `genie_space_id`
+  into `databricks.yml`, and redeploys. Pass `GENIE_GROUP=<group>` to also grant that group `CAN_RUN`.
+
+**Two Genie+OBO steps the deploy genuinely can't do** (security-gated — surfaced in the preflight banner):
+
+1. A **workspace admin** enables the **"Databricks Apps – On-Behalf-Of-User Authorization"** Public Preview.
+2. **Each end user accepts the OAuth consent** on first open (a stale browser session → 403
+   `invalid scope`; re-open in a fresh/incognito session). End users also need `CAN_RUN` on the space
+   (use `GENIE_GROUP`), `CAN USE` on a serverless/pro warehouse, and `SELECT` on the underlying tables.
+
+Until those are done the **Analytics/Genie route degrades gracefully** and every other route works.
+
+> **Don't delete the app to "start clean."** Redeploy in place (`make deploy` / `make redeploy`).
+> Deleting the app destroys its service principal and orphans the Lakebase schemas it owns. If you
+> must recreate, detach the Lakebase resource as `CAN MANAGE` first — see
+> [`lakebase-apps-permissions.md`](lakebase-apps-permissions.md).
 
 If you registered the Lakebase database as a UC catalog via CLI and it failed, register it in the
 UI (*Catalog Explorer → Create catalog → from a Lakebase database*) — the autoscaling
