@@ -53,8 +53,9 @@ build-backend = "hatchling.build"
 packages = ["agent_server"]
 
 [project.scripts]
-# P0: `start-server` runs the agent server (FastAPI + run/poll/resume + chat proxy). `start-app`
-# is an alias for now; Slice 4 repoints it at a launcher that also boots the Next.js frontend.
+# `start-server` runs the agent server (FastAPI + run/poll/resume + chat proxy; serves the built
+# SPA at /ui). `start-app` is a convenience alias for it, kept because the vendored skills call
+# `uv run start-app`. For live frontend dev use `npm --prefix frontend run dev` (Vite).
 start-server = "agent_server.start_server:main"
 start-app = "agent_server.start_server:main"
 # Dispatches: bare → evaluate_direct (legacy), --harness → evaluate (legacy), --layer/--fast/--full

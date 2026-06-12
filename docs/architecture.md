@@ -8,19 +8,160 @@ instrumented end-to-end with **MLflow**. Built on **LangGraph** with all durable
 > Source: Google Doc "Lakebase for the GenAI/ML Persona Storyboard" (Architecture + Copilot
 > tabs), refined to the **Databricks-native LangGraph + Lakebase integration** (see below).
 
+## End-to-end architecture
+
+Four layered Mermaid views, narrow → wide: the hero overview, then the build-time seed pipeline,
+the agent runtime graph, and the permissions/identity map. Node/table/endpoint names match the
+code (`databricks.yml`, `agent_server/graph/build_graph.py`, `agent_server/tools/operational_tool.py`,
+`data/**`, `agent_server/config.py`).
+
+### Diagram 1 — End-to-end overview
+
+The "simple but effective" hero view: a one-shot **seed job** lays down UC Delta + Lakebase
+(operational + memory) + Genie + Vector Search; the **LangGraph App** reads those surfaces, writes
+durable state back to Lakebase, and emits MLflow traces; the **Vite + React SPA at `/ui`** talks to
+the App's FastAPI `/api/*` endpoints.
+
+```mermaid
+flowchart LR
+  subgraph Build["Build time (seed job)"]
+    seed["setup_and_seed job"]
+    uc[("UC Delta<br/>suppliers / inventory / POs")]
+    lb[("Lakebase Postgres<br/>public + memory + app")]
+    genie(["Genie space"])
+    vs[("Vector Search<br/>knowledge_chunks_index")]
+    seed --> uc
+    seed --> lb
+    seed --> genie
+    seed --> vs
+  end
+
+  subgraph App["Runtime · Agent (Databricks App)"]
+    lg["LangGraph supervisor graph"]
+    fastapi["FastAPI /api/* + /invocations"]
+    mlflow[["MLflow traces (UC)"]]
+    lg --> fastapi
+    lg --> mlflow
+  end
+
+  subgraph FE["Runtime · Frontend"]
+    spa["Vite + React SPA at /ui"]
+  end
+
+  lb -->|"read + write state"| lg
+  genie -->|"NL to SQL"| lg
+  vs -->|"passages"| lg
+  uc -.->|"synced to"| lb
+  spa <-->|"SSE /api/chat/stream"| fastapi
+```
+
+### Diagram 2 — Data / seed pipeline
+
+The `setup_and_seed` DABs job: a `bootstrap_schemas` task, then three independent chains
+(operational → Lakebase, Genie, knowledge → Vector Search). Task keys and table/index names are
+verbatim from `databricks.yml`.
+
+```mermaid
+flowchart TB
+  boot["bootstrap_schemas"]
+
+  subgraph Op["Operational chain to Lakebase"]
+    op1["create_operational_schema"]
+    op2["generate_operational_data"]
+    op3["pre_seed_pgvector<br/>public.quality_incidents (1024-d HNSW cosine)"]
+    op4["sync_to_lakebase<br/>inventory_current / open_pos / user_access / dims"]
+    op5["verify_hybrid_query"]
+    op6["grant_app_sp<br/>SELECT+USAGE on public to App SP"]
+    op1 --> op2 --> op3 --> op4 --> op5
+    op4 --> op6
+  end
+
+  subgraph Gen["Genie chain"]
+    g1["create_genie_space<br/>over the 5 Delta tables"]
+  end
+
+  subgraph Kn["Knowledge chain to Vector Search"]
+    k1["upload_pdfs to UC Volume documents"]
+    k2["parse_and_chunk to Delta knowledge_chunks (CDF)"]
+    k3["build_vs_index<br/>knowledge_chunks_index on supply-chain-planner-vs"]
+    k1 --> k2 --> k3
+  end
+
+  boot --> op1
+  op2 --> g1
+  boot --> k1
+```
+
+### Diagram 3 — Agent runtime graph
+
+The LangGraph topology with real node names (`build_graph.py`). `supervisor` fans out (conditional
+edge → list) to the gather siblings in one superstep; they fan in on `hydrate_memory`; the planner
+is **sequential** today (per-SKU/supplier `Send` fan-out is P2); `gate_router` conditionally routes
+to `hitl_review` (the durable `interrupt()`) or straight to `commit`. Each gather node is annotated
+with its backend + auth.
+
+```mermaid
+flowchart TB
+  start((START)) --> sup["supervisor (router · haiku-4-5)"]
+
+  sup -->|conditional fan-out| gk["gather_knowledge<br/>Vector Search · OBO"]
+  sup -->|conditional fan-out| ga["gather_analytics<br/>Genie · OBO"]
+  sup -->|conditional fan-out| go["gather_operational<br/>Lakebase hybrid SQL · App SP"]
+
+  gk --> hm["hydrate_memory<br/>reads AsyncDatabricksStore"]
+  ga --> hm
+  go --> hm
+
+  hm --> pl["planner (sequential · opus-4-8)<br/>recommendation + PlannedActions"]
+  pl --> gr{"gate_router<br/>needs_approval?"}
+  gr -->|yes| hitl["hitl_review · interrupt()"]
+  gr -->|no| commit
+  hitl --> commit["commit<br/>writes memory + write-back tables"]
+  commit --> done((END))
+```
+
+### Diagram 4 — Permissions / UC + OBO map
+
+Two identity lanes. The **App Service Principal** carries non-OBO work: the `postgres` app resource
+grants CONNECT+CREATE so the SP self-owns its `…_memory` + `…_app` schemas at startup; the seed's
+`grant_app_sp` adds SELECT on `public`; the experiment resource grants CAN_MANAGE for UC traces. The
+**signed-in user (OBO)** carries the 7 `user_api_scopes` for Genie / Vector Search / UC reads /
+serving. The dashed line is the Lakebase schema-ownership boundary.
+
+```mermaid
+flowchart LR
+  subgraph SP["App Service Principal"]
+    res_pg["postgres resource<br/>CONNECT + CREATE"]
+    res_exp["experiment resource<br/>CAN_MANAGE"]
+    mem[("…_memory (SP-owned)")]
+    appsc[("…_app (SP-owned)")]
+    pub[("public · SELECT via grant_app_sp")]
+    traces[["MLflow UC traces"]]
+    res_pg -->|self-owns| mem
+    res_pg -->|self-owns| appsc
+    res_pg -.->|SELECT only| pub
+    res_exp --> traces
+  end
+
+  subgraph User["Signed-in user (OBO)"]
+    scopes["7 user_api_scopes"]
+    sc_genie(["dashboards.genie"])
+    sc_vs(["vectorsearch.vector-search-indexes"])
+    sc_sql(["sql"])
+    sc_serv(["serving.serving-endpoints"])
+    sc_uc(["catalog.tables/schemas/catalogs:read"])
+    scopes --> sc_genie
+    scopes --> sc_vs
+    scopes --> sc_sql
+    scopes --> sc_serv
+    scopes --> sc_uc
+  end
+```
+
 ## Topology
 
-```
-Supervisor (router)
-   → parallel Gather
-        ├─ Operational  (Lakebase: similarity + SQL joins) — rows + operational context
-        ├─ Knowledge    (Mosaic AI Vector Search)          — passages for grounding
-        └─ Analytics    (Genie / NL→SQL)                   — structured aggregation
-   → Planner (fan-out per SKU/supplier)
-   → Aggregate + Gate (threshold → needs_approval / est_cost)
-   → [HITL interrupt()]  (approve / reject / — later — edit + replan)
-   → Commit  (write decision; update long-term memory)
-```
+The runtime graph is shown in **Diagram 3** above (real node names from `build_graph.py`).
+The original ASCII sketch is superseded by that diagram.
 
 ## Key decisions
 
@@ -29,8 +170,11 @@ Supervisor (router)
 - **Databricks Apps, not Model Serving.** Planning runs execute in-process as background work
   with the UI polling state — Apps times out long synchronous requests, and the durable
   checkpoint makes a run resumable across app restarts.
-- **On-behalf-of-user (OBO) auth** for Genie. The Operational agent enforces access scope as a
-  predicate inside its SQL (e.g. `product_code IN planner_acl`).
+- **On-behalf-of-user (OBO) auth** for Knowledge (Vector Search) and Analytics (Genie), via the
+  app's `user_api_scopes`. The Operational agent runs as the **App service principal** against
+  Lakebase and enforces access scope as a predicate inside its SQL (the
+  `JOIN user_access ua ON ua.scope = m.category AND ua.user_id = …` join — see Diagram 4 and the
+  Operational-agent section).
 
 ## State, memory & the pgvector path — LangGraph + Lakebase integration
 
@@ -74,9 +218,12 @@ agent = create_agent(model=ChatDatabricks(endpoint=LLM_ENDPOINT), tools=[...],
 the agent remember across threads, and what semantically similar memories should it retrieve now?"
 
 ### LangGraph state discipline
-Gather agents write **distinct** state keys (no reducer); the planner fan-out writes the shared
-`plans` key (reducer required). Bulk payloads go to side tables; state holds references (every
-superstep serializes the full snapshot).
+Gather agents write **distinct** state keys (no reducer) — `knowledge_result`, `analytics_result`,
+`operational_result`. The planner is **sequential** today: it composes a single `recommendation`
+(`PlannerRecommendation`) plus its ordered, per-action `PlannedAction`s into one state key (no
+reducer needed). Per-SKU/supplier planner fan-out via `Send` — which would need a reducer over a
+shared list key — is a **P2** item, not the current shape. Bulk payloads go to side tables; state
+holds references (every superstep serializes the full snapshot).
 
 ## The Operational agent — similarity + SQL joins in one query
 
@@ -88,20 +235,29 @@ and round-tripping to Postgres to join, re-filter, and re-check access.
 **Canonical case.** *"Similar quality issues for this supplier, scoped to product codes I can
 access, joined to on-hand inventory and open POs."*
 
+The real query lives in `agent_server/tools/operational_tool.py` (`HYBRID_SQL`, schema-qualified to
+`public` and kept in sync with `data/operational/04_verify_hybrid_query.py`):
+
 ```sql
-SELECT m.summary, m.supplier_id, m.sku, i.on_hand_qty, po.open_po_qty,
-       1 - (m.embedding <=> %(query_embedding)s) AS similarity
-FROM agent_memory m
-JOIN inventory i  ON m.sku = i.sku
-JOIN open_pos  po ON m.supplier_id = po.supplier_id AND m.sku = po.sku
-JOIN user_access ua ON ua.product_code = m.product_code
-WHERE ua.user_id = %(user_id)s AND m.expired_at IS NULL
-ORDER BY m.embedding <=> %(query_embedding)s
+SELECT m.incident_id, m.summary, m.supplier_id, m.sku, m.category,
+       i.on_hand_qty, po.open_po_qty,
+       round((1 - (m.embedding <=> %(q)s::vector))::numeric, 3) AS similarity
+FROM public.quality_incidents m
+JOIN public.inventory_current i  ON m.sku = i.sku
+JOIN public.open_pos          po ON m.supplier_id = po.supplier_id AND m.sku = po.sku
+JOIN public.user_access       ua ON ua.scope = m.category AND ua.user_id = %(user_id)s
+WHERE m.expired_at IS NULL
+ORDER BY m.embedding <=> %(q)s::vector
 LIMIT 5;
 ```
 
-Operational tables (inventory, open POs, supplier status) reach Lakebase via **Synced Tables**
-(Continuous for fast tables, Snapshot for slow dims) so the joins hit fresh OLTP rows.
+The similarity predicate runs over `public.quality_incidents` — a NATIVE pgvector table
+(1024-d, HNSW, cosine) pre-seeded via the `databricks-gte-large-en` embedding endpoint; the access
+scope is the in-query `JOIN user_access ua ON ua.scope = m.category AND ua.user_id = …` predicate.
+The relational tables (`inventory_current`, `open_pos`, `user_access`, plus `suppliers` /
+`product_dim` / `supplier_status` dims) reach Lakebase via **Synced Tables** — the two live tables
+follow `LAKEBASE_SYNC_MODE` (Snapshot by default for the static demo, flip to Continuous/CDF for a
+live-update demo); the dims are always Snapshot — so the joins hit fresh OLTP rows.
 
 ## Lakebase vs Mosaic AI Vector Search
 

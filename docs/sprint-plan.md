@@ -1,5 +1,8 @@
 # Sprint Plan — Supply-Chain Planner Demo (~1.5 weeks, team of 4–5)
 
+> **Historical — Phase 0 (complete).** This documents the initial sprint; current planning lives
+> in [`phase2-workstreams.md`](phase2-workstreams.md).
+
 **Goal:** a thin end-to-end slice that proves the architecture on the stack — not breadth. Build
 with Claude Code against shared contracts so the workstreams don't block each other.
 

@@ -4,6 +4,11 @@ A modular toolkit for account teams selling Lakebase to **GenAI/ML developer** p
 the scenarios that match the customer's pain. The Supply-Chain Planner Copilot demo in this repo
 primarily proves **Scenarios 1 (Agentic State), 3 (Semantic Search), and 5 (Cost)**.
 
+> **Canonical seeded scenario:** any IGBT / semiconductor-shortage narrative used in the pitch is
+> illustrative; the demo's actual seeded data is a Henkel (SUP-001) / SKU-1001 adhesive quality
+> issue (on-hand 40, open POs ~800, Q4 2026). See the README Tier 1/2/2b questions for the
+> canonical test prompts.
+
 > Source: Google Doc "Lakebase for the GenAI/ML Persona Storyboard" → *Tab 1* + *Supply Chain
 > Planner Copilot* tab. **How we build it:** the agent-state and semantic-search scenarios run
 > on the **LangGraph + Lakebase integration** in `databricks-langchain` (`AsyncCheckpointSaver`

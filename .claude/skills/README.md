@@ -20,16 +20,18 @@ These are the primary build skills for a LangGraph-on-Apps agent with Lakebase m
 | `create-tools` | Build tool resources: UC functions/connections, Genie space, Vector Search index, local Python tools |
 | `add-tools` | Wire a tool into the agent **and** grant permissions in `databricks.yml` (many `examples/*.yaml`) |
 | `deploy` | Deploy to Databricks Apps via DABs; bind/replace an existing app |
-| `run-locally` | Local backend + frontend, `uv run start-app` |
+| `run-locally` | Local run loop (`uv run start-app`/`start-server`; this repo's frontend is Vite — `npm --prefix frontend run dev` for live UI) |
 | `modify-agent` | Edit agent code: system prompt, model, tools |
 | `load-testing` | Load-test the deployed agent |
 | `migrate-from-model-serving` | Move an existing Model Serving agent onto this template |
 
-> **Note:** These skills assume the template's `agent_server/` + `scripts/` layout, which
-> **WS1 will bring into this repo** (copy from the template — see `agent_server/README.md`).
-> They are useful as procedural guides even before that code lands. The template's
-> `AGENTS.md` also references `supervisor-api` / `supervisor-api-background-mode` skills —
-> pull those from the template if/when the team adopts the Supervisor API path.
+> **Note:** These skills assume the template's `agent_server/` + `scripts/` layout, which is now
+> in this repo (see [`agent_server/README.md`](../../agent_server/README.md)), so they work as
+> procedural guides for the live code — with two repo-specific deltas: the frontend is **Vite +
+> React** (not the template's Next.js), and the app entrypoint is `start-server` (with `start-app`
+> kept as an alias). The template's `AGENTS.md` also references `supervisor-api` /
+> `supervisor-api-background-mode` skills — pull those from the template if/when the team adopts
+> the Supervisor API path.
 
 ## 2. Databricks Agent Skills (vendored, pinned — selective)
 
@@ -56,6 +58,16 @@ From [`mlflow/skills`](https://github.com/mlflow/skills) @ `b90eca1`:
 `instrumenting-with-mlflow-tracing`, `agent-evaluation`, `analyze-mlflow-trace`. The rest
 (chat-session/trace retrieval, metrics, onboarding, docs search) are available via
 `npx skills add mlflow/skills`.
+
+## 4. Repo-authored skills (NOT vendored)
+
+Written for **this** repo — not copied from any upstream, so they are **never** overwritten by the
+`UPSTREAM.md` refresh (the refresh `rsync`s only the named upstream skill dirs above). Edit these
+freely; they have no pinned SHA.
+
+| Skill | What it covers |
+|-------|----------------|
+| `sync-architecture-docs` | Keep `docs/architecture.md` (the 4 Mermaid diagrams) + the READMEs/`CLAUDE.md` in sync with the code; reconcile the known stale-doc patterns; verify with greps + Mermaid validity. Run after topology/tool/schema/auth/frontend changes. |
 
 ---
 
