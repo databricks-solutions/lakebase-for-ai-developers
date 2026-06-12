@@ -169,6 +169,24 @@ uv run python -c "from databricks.sdk import WorkspaceClient; print(WorkspaceCli
 
 Every `databricks` CLI command needs the profile (`--profile <p>` or `DATABRICKS_CONFIG_PROFILE=<p>`).
 
+**Deploying** — one command; all logic lives in [`scripts/deploy.sh`](scripts/deploy.sh)
+(idempotent, cold-start-safe, graceful per-step degradation). Full walkthrough: [`docs/DEPLOY.md`](docs/DEPLOY.md).
+
+```bash
+make deploy      PROFILE=<p>              # full one-shot: preflight · Lakebase project · build · deploy · seed · Genie · verify
+make deploy      PROFILE=<p> TARGET=demo  # clean prod-style names (default: dev)
+make redeploy    PROFILE=<p>              # FAST: agent-server code change → bundle deploy + bundle run (~30-60s)
+make redeploy-ui PROFILE=<p>              # FAST: frontend change → npm build + deploy + run
+```
+
+- **`bundle deploy` ≠ `bundle run`.** `bundle deploy` only uploads source + reconciles resources;
+  `bundle run <app-key>` creates the active deployment that makes the new code live. The fast loops do both.
+- **Never delete the app — redeploy in place.** The app SP (and its Lakebase-owned schemas) is stable
+  across redeploys but **destroyed on app delete**, which orphans the schemas (`databricks_superuser`
+  can't reassign them — no `SET ROLE`). If you must recreate, **detach the Lakebase resource as
+  `CAN MANAGE` first** (the platform reassigns the SP's objects and drops the role cleanly). See
+  [`docs/lakebase-apps-permissions.md`](docs/lakebase-apps-permissions.md).
+
 ## Repo layout & workstreams
 
 | Path | Workstream / owner | Holds |
@@ -199,11 +217,15 @@ Every `databricks` CLI command needs the profile (`--profile <p>` or `DATABRICKS
 - **One stub/mock per agent** so workstreams build/test in isolation.
 - **Small, contract-respecting PRs.**
 - **Keep `interrupt()` out of parallel steps.**
-- **Auth:** on-behalf-of-user (OBO) / OAuth for Knowledge (Vector Search) + Genie; the Operational
+- **Auth:** on-behalf-of-user (OBO) / OAuth for Knowledge (Vector Search) + Genie (scope
+  `dashboards.genie` — **not** the newer `genie`, which Apps don't support yet); the Operational
   agent + Lakebase use the app service principal. The Operational agent returns its generated SQL
   so the join is traceable and scorable.
-- **DABs carve-out:** the Genie space is not a clean DABs resource — create it manually and
-  reference it as an app resource.
+- **Genie carve-out:** the Genie space is auto-created by the seed job and wired via the
+  `genie_space_id` bundle var (`deploy.sh` captures the id and redeploys) — it is **not** a DABs
+  resource. Two OBO steps the deploy *cannot* automate (security-gated): a workspace admin must
+  enable the **Apps – On-Behalf-Of-User Authorization** Public Preview, and **each user accepts the
+  OAuth consent on first open**. Until then the Analytics route degrades gracefully; every other route works.
 
 ## Skills
 

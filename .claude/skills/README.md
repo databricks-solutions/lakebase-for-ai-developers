@@ -5,6 +5,25 @@ commands, patterns, and troubleshooting steps. There are **three** skill sources
 **vendored (committed) and pinned**. Provenance + commit SHAs + refresh steps are in
 [`UPSTREAM.md`](UPSTREAM.md).
 
+## Project deploy notes / stale-skill flags (read before using the deploy/apps skills)
+
+The vendored skills are generic and pinned — they are refreshed from upstream, so **don't edit them
+in place** (changes get clobbered). For *this repo*, the canonical deploy guidance lives in
+[`docs/DEPLOY.md`](../../docs/DEPLOY.md) + [`scripts/deploy.sh`](../../scripts/deploy.sh), not the
+generic `deploy` skill. Specific deltas to keep in mind:
+
+- **`deploy` skill — its "delete & recreate the app" path is the Lakebase orphan trap here.** This
+  app's service principal owns Lakebase schemas; deleting the app destroys the SP and orphans them
+  (`databricks_superuser` can't reassign — no `SET ROLE`). **Redeploy in place** (`make deploy` /
+  `make redeploy`); if you must recreate, detach the Lakebase resource as `CAN MANAGE` first. See
+  [`docs/lakebase-apps-permissions.md`](../../docs/lakebase-apps-permissions.md).
+- **`databricks-apps` / `add-tools` skills predate the Apps-OBO Public-Preview requirement for Genie.**
+  Genie via OBO needs a workspace admin to enable the **"Apps – On-Behalf-Of-User Authorization"**
+  Public Preview *and* each user to accept the OAuth consent on first open — neither is automatable.
+  Use scope `dashboards.genie` (not `genie`). Current steps: [`docs/DEPLOY.md`](../../docs/DEPLOY.md).
+- **CLI floor is ≥ 0.295** for this repo's native `postgres` app resource (`deploy.sh` enforces it),
+  not the 0.294 some skills mention.
+
 ## 1. Vendored template skills (in this directory)
 
 Copied verbatim from

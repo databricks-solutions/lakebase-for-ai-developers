@@ -59,6 +59,10 @@ class Settings(BaseModel):
     # --- Analytics agent (Genie) ---
     genie_space_id: str = Field(default="", alias="GENIE_SPACE_ID")
     warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
+    # Optional group granted CAN_RUN on the Genie space at creation time, so end users can query it
+    # via OBO without a per-user grant. Empty/"unset" = skip (deployer shares it later in the UI).
+    # Only used by the seed (data/genie/02_create_genie_space.py), not at app runtime.
+    genie_consumer_group: str = Field(default="", alias="GENIE_CONSUMER_GROUP")
 
     @field_validator("genie_space_id")
     @classmethod
@@ -66,6 +70,11 @@ class Settings(BaseModel):
         # The DABs bundle defaults GENIE_SPACE_ID to a non-empty sentinel ("unset") because Apps
         # rejects env entries with no value and DABs drops empty strings. Treat the sentinel (and
         # any blank) as unset so the Analytics route degrades gracefully (genie_tool checks falsy).
+        return "" if (v or "").strip().lower() in ("", "unset", "none") else v
+
+    @field_validator("genie_consumer_group")
+    @classmethod
+    def _normalize_genie_consumer_group(cls, v: str) -> str:
         return "" if (v or "").strip().lower() in ("", "unset", "none") else v
 
     # --- LLM endpoints — two LLM callsites (router + planner).

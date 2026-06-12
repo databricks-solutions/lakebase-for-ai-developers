@@ -31,8 +31,9 @@ which the bundle ships via `sync.include`.
 ## 2. Prerequisites
 
 ### Tooling (your laptop)
-- [ ] **Databricks CLI** ≥ 0.294 (`databricks -v`) — required for the native `postgres` app resource
-      (older CLIs treat the `postgres` resource key as an unknown field and the deploy fails)
+- [ ] **Databricks CLI** ≥ 0.295 (`databricks -v`) — `deploy.sh` enforces this in preflight. The
+      native `postgres` app resource needs it (0.294 first recognized the key; older CLIs treat it as
+      an unknown field and the deploy fails)
 - [ ] **Node.js 18+** and npm (builds the SPA)
 - [ ] **uv** (`pip install uv`) — used by the App runtime and local runs
 
@@ -59,10 +60,10 @@ You'll plug these into the bundle variables in §4:
 The agent's durable state (checkpoints + long-term memory) and the operational hybrid query live
 in Lakebase autoscaling Postgres.
 
-> **`make deploy` now ensures the project exists for you** (idempotent) via a `make lakebase-project`
-> step (`scripts/ensure_lakebase_project.py`) that runs before the bundle deploy — so the native
-> `postgres` app resource always has a project/branch/database to bind to. The manual create below
-> is still useful if you want to pre-create the project or pick non-default names.
+> **`make deploy` ensures the project exists for you** (idempotent) — `deploy.sh` phase 1 runs
+> `scripts/ensure_lakebase_project.py` before the bundle deploy, so the native `postgres` app
+> resource always has a project/branch/database to bind to. The manual create below is still useful
+> if you want to pre-create the project or pick non-default names.
 
 Create a project (UI: **Compute → Lakebase → Create**, or the `databricks-lakebase-autoscale`
 skill / CLI):
@@ -142,46 +143,39 @@ The App SP's Lakebase access is **fully automatic** — there is no manual grant
   tables (the one thing the resource can't — those tables are platform-owned). It runs **after**
   `sync_to_lakebase` and after the app is deployed, so the tables and the SP both already exist.
 
-That wrapper runs these steps (raw equivalents are in the header of `databricks.yml`):
-1. `npm --prefix frontend ci && npm --prefix frontend run build` → `frontend/dist`
-2. `make lakebase-project` (`scripts/ensure_lakebase_project.py`) → ensures the Lakebase project exists (idempotent)
-3. `databricks bundle deploy -t dev --profile <p>` → uploads source + creates the app **object**, experiment, job
-4. `databricks bundle run supply_chain_planner -t dev --profile <p>` → **deploys the app** (creates the active deployment that points it at the source and makes it live; this is also when the `postgres` resource registers the SP's Postgres role)
-5. `databricks bundle run setup_and_seed -t dev --profile <p>` → loads demo data + the `grant_app_sp` SELECT grant
+That wrapper ([`scripts/deploy.sh`](../scripts/deploy.sh)) runs these phases — critical phases fail
+fast; seed/Genie/verify **degrade gracefully** so a partial failure still leaves a working core app:
+0. **Preflight** — CLI ≥ 0.295, authenticated profile, `uc_catalog` exists, `node`/`uv` present; prints the Genie+OBO manual-steps banner.
+1. **Lakebase project** — `scripts/ensure_lakebase_project.py` ensures the autoscaling project (idempotent).
+2. **Build** — `npm --prefix frontend ci && run build` → `frontend/dist`.
+3. **`bundle deploy`** — uploads source + creates the app **object**, experiment, job.
+4. **`bundle run supply_chain_planner`** — **deploys the app** (creates the active deployment that makes it live; also when the `postgres` resource registers the SP's Postgres role).
+5. **`bundle run setup_and_seed`** — loads demo data + the `grant_app_sp` SELECT grant (unless `SEED=false`).
+6. **Genie wire-up** — creates/finds the space, captures its id, patches `genie_space_id` into `databricks.yml`, and redeploys. `GENIE_GROUP=<group>` also grants that group `CAN_RUN`.
+7. **Verify + report** — runs `scripts/verify_deploy.py`, waits for the app to be ACTIVE, prints the URL.
 
-> **Why deploying the app is a separate step (step 4):** `bundle deploy` does *not* deploy an app —
-> it only creates the app object (the shell). The app stays "No source code / Unavailable" until
-> `bundle run <app-key>` (= `apps deploy`) creates a deployment. `make deploy` does this for you; if
+> **Why deploying the app is a separate step (4):** `bundle deploy` does *not* deploy an app — it
+> only creates the app object (the shell). The app stays "No source code / Unavailable" until
+> `bundle run <app-key>` (= `apps deploy`) creates a deployment. `deploy.sh` does this for you; if
 > you ever run the raw commands, don't skip it.
 
-Then there is **one post-deploy step** (a carve-out that can't be a DABs resource — the App SP's
-Lakebase grants are now handled automatically by the `postgres` resource + the `grant_app_sp` seed
-task, so they are **no longer** a manual step):
+**Fast dev loop** — once deployed, iterate without re-seeding (stays on the same target/app, never deletes it):
+```bash
+make redeploy    PROFILE=<p>   # agent-server code change → bundle deploy + bundle run (~30-60s)
+make redeploy-ui PROFILE=<p>   # frontend change → npm build + deploy + run
+```
 
-1. **Wire the Genie space.** The Genie space is a carve-out — it isn't a DABs resource, so it's a
-   two-phase wire-up. The first deploy ran with `genie_space_id` blank; the seed's
-   `create_genie_space` task **created** a Genie space and printed its id. Grab that id and redeploy
-   the app (only) with it set, so the Analytics (NL→SQL) route binds.
+### Genie is auto-wired — but OBO has two manual, security-gated steps
 
-   **Get the id** from the `create_genie_space` task output:
-   ```bash
-   # find the latest setup_and_seed run, then read the create_genie_space task's output
-   RUN=$(databricks jobs list-runs --profile <p> -o json \
-     | python3 -c 'import sys,json;rs=[r for r in json.load(sys.stdin)["runs"] if "setup-and-seed" in r["run_name"]];print(rs[0]["run_id"])')
-   databricks jobs get-run "$RUN" --profile <p> -o json \
-     | python3 -c 'import sys,json;d=json.load(sys.stdin);print([t["run_id"] for t in d["tasks"] if t["task_key"]=="create_genie_space"][0])' \
-     | xargs -I{} databricks jobs get-run-output {} --profile <p> -o json \
-     | python3 -c 'import sys,json;print(json.load(sys.stdin).get("logs",""))' | grep -i "genie.*space\|space.*id"
-   ```
-   (Or open the run in the **Jobs UI → `create_genie_space` task → Output** and copy the id.)
+`deploy.sh` phase 6 handles the Genie space end-to-end (create/find → capture id → patch
+`databricks.yml` → redeploy), so you no longer hand-copy the id from the job output. Two things it
+**cannot** do for you (surfaced in the preflight banner):
+1. A **workspace admin** enables the **"Databricks Apps – On-Behalf-Of-User Authorization"** Public Preview.
+2. **Each end user accepts the OAuth consent** on first open (a stale browser session → 403
+   `invalid scope`; re-open in a fresh/incognito session). End users also need `CAN_RUN` on the space
+   (pass `GENIE_GROUP=<group>`), `CAN USE` on a serverless/pro warehouse, and `SELECT` on the underlying tables.
 
-   **Set it and redeploy the app** — pass it via `VARS` along with the same catalog/project you
-   deployed with (`SEED=false` skips re-seeding; the data is already loaded):
-   ```bash
-   make deploy PROFILE=<p> SEED=false \
-     VARS="uc_catalog=<catalog> lakebase_project=<project-id> genie_space_id=<the-id>"
-   ```
-   (Until set, the Analytics/Genie route degrades gracefully — every other route works.)
+Until those are done the Analytics/Genie route degrades gracefully — every other route works.
 
 ### Verify
 ```bash

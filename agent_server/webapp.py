@@ -126,7 +126,10 @@ def _obo_client(caller: Caller):
     from databricks.sdk import WorkspaceClient
 
     if caller.access_token and not caller.is_local:
-        return WorkspaceClient(host=_workspace_host(), token=caller.access_token)
+        # auth_type="pat" required on Apps — the SP's DATABRICKS_CLIENT_ID/SECRET are in the env,
+        # so passing token= alone trips Config._validate()'s "more than one authorization method"
+        # guard. Pinning it forces the caller's forwarded token (see agent_server.obo).
+        return WorkspaceClient(host=_workspace_host(), token=caller.access_token, auth_type="pat")
     return WorkspaceClient()
 
 

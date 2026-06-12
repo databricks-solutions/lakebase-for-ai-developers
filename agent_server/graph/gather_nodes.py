@@ -76,12 +76,18 @@ def analytics_node(state: AgentState) -> dict:
     _substep("gather_analytics", "Genie: submitting query…")
     if _use_stubs():
         result = ask_genie_fake(question)
-        _substep("gather_analytics", f"Genie: {len(result.rows)} rows, SQL ready")
+        # GenieResult.rows is Optional — a text-only / clarification answer has rows=None. Guard
+        # the count: an unguarded len(None) here used to throw, get caught below, and discard a
+        # perfectly good answer as "analytics gather failed".
+        _substep("gather_analytics", f"Genie: {len(result.rows or [])} rows, SQL ready")
         return {"analytics_result": result}
     try:
         from agent_server.tools.genie_tool import ask_genie_impl
         result = ask_genie_impl(question)
-        _substep("gather_analytics", f"Genie: {len(result.rows)} rows, SQL ready")
+        # GenieResult.rows is Optional — a text-only / clarification answer has rows=None. Guard
+        # the count: an unguarded len(None) here used to throw, get caught below, and discard a
+        # perfectly good answer as "analytics gather failed".
+        _substep("gather_analytics", f"Genie: {len(result.rows or [])} rows, SQL ready")
         return {"analytics_result": result}
     except Exception as exc:  # degrade, don't fail the run
         logger.warning("analytics gather failed (degrading to empty): %s", exc)

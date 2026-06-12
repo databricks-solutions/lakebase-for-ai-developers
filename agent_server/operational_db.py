@@ -140,29 +140,120 @@ _DDL_CONSTRAINTS = f"""
 _WRITEBACK_DDL = (_DDL_APPROVED_ACTIONS, _DDL_PLANNING_PARAMETERS, _DDL_CONSTRAINTS)
 
 
+def _build_remediation_sql(schema: str, role: str) -> str:
+    """The GRANT / ALTER-DEFAULT-PRIVILEGES block an *owner* can run to give the connecting role
+    (`role` — the app SP on Databricks) access to a schema it doesn't own. This is the only
+    self-serve fix short of DROP, because `databricks_superuser` is not a true Postgres superuser
+    and `SET ROLE` is unsupported on Lakebase, so `ALTER … OWNER TO <sp>` / `REASSIGN OWNED` aren't
+    available. See docs/lakebase-apps-permissions.md."""
+    return "\n".join(
+        [
+            f'GRANT USAGE, CREATE ON SCHEMA {schema} TO "{role}";',
+            f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO "{role}";',
+            f'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {schema} TO "{role}";',
+            f'ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{role}";',
+            f'ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "{role}";',
+        ]
+    )
+
+
+def _ensure_role_owned_schema(cur, schema: str, *, label: str, consequence: str, fatal: bool) -> bool:
+    """Ensure the connecting role owns `schema` so the app SP can create/write its own objects.
+
+    Lakebase's `postgres` app resource grants the SP CONNECT + CREATE on the database, so on a fresh
+    branch the SP can `CREATE SCHEMA` and thereby OWN it. The failure mode this guards is a SHARED
+    branch where the schema already exists owned by a DIFFERENT principal — a developer's local run,
+    or an orphaned role from a deleted+recreated app (the app SP is destroyed on delete; recreate
+    mints a new SP whose `CREATE … IF NOT EXISTS` silently no-ops on the orphaned schema). In that
+    case the SP gets no USAGE and the real failure surfaces later as a buried `permission denied for
+    schema …`. We detect it up front and surface a loud, actionable remediation instead.
+
+    Returns True if the connecting role owns (or now owns) the schema. If foreign-owned: logs the
+    remediation and either raises (fatal — the feature genuinely can't work) or returns False
+    (degrade). Does NOT commit — the caller owns the transaction."""
+    cur.execute(
+        "SELECT pg_catalog.pg_get_userbyid(nspowner) AS owner "
+        "FROM pg_catalog.pg_namespace WHERE nspname = %s",
+        (schema,),
+    )
+    row = cur.fetchone()
+    owner = row["owner"] if row else None
+
+    if owner is None:
+        # Fresh branch — create it so the connecting role (the SP on Databricks) owns it.
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        logger.info("Created %s schema %r (owned by the connecting role)", label, schema)
+        return True
+
+    cur.execute("SELECT current_user AS role")
+    current_role = cur.fetchone()["role"]
+    if owner == current_role:
+        logger.debug("%s schema %r already owned by the connecting role", label, schema)
+        return True
+
+    grants = _build_remediation_sql(schema, current_role)
+    logger.error(
+        "%s schema %r is owned by %r, not the connecting role %r — %s. Fix, as %r (the owner; "
+        "`ALTER … OWNER TO` the SP needs SET-ROLE membership the owner usually lacks): either GRANT "
+        "the SP access —\n%s\n— or, for clean SP ownership, `DROP SCHEMA %s CASCADE;` then restart "
+        "the app so the SP recreates+owns it. See docs/lakebase-apps-permissions.md.",
+        label,
+        schema,
+        owner,
+        current_role,
+        consequence,
+        owner,
+        grants,
+        schema,
+    )
+    if fatal:
+        raise RuntimeError(
+            f"{label} schema {schema!r} is owned by {owner!r}, not the app service principal "
+            f"{current_role!r}; the app can't create/write its objects there. Remediation logged "
+            f"above (GRANT to the SP, or `DROP SCHEMA {schema} CASCADE` + restart). "
+            f"See docs/lakebase-apps-permissions.md."
+        )
+    return False
+
+
 def ensure_writeback_tables() -> None:
     """Idempotently create the SP-owned write-back schema + the three Meridian write-back tables.
     Sync (uses operational_pool). The schema-qualified DDL overrides the pool's operational
-    search_path, so running it through operational_pool() is fine."""
+    search_path, so running it through operational_pool() is fine. Fails loud if the write-back
+    schema exists but is foreign-owned (Meridian HITL commit would otherwise fail at commit time)."""
     with operational_pool().connection() as conn, conn.cursor() as cur:
-        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_WRITEBACK_SCHEMA}")
+        _ensure_role_owned_schema(
+            cur,
+            _WRITEBACK_SCHEMA,
+            label="Meridian write-back",
+            consequence="HITL commit (write_committed_actions) will fail with 'permission denied'",
+            fatal=True,
+        )
         for ddl in _WRITEBACK_DDL:
             cur.execute(ddl)
         conn.commit()
 
 
 def ensure_memory_schema() -> None:
-    """Create the LangGraph agent-memory schema if absent. The checkpointer + store are configured
-    with schema=<lakebase_memory_schema>, but databricks_langchain does NOT create it — so when it's
-    absent their unqualified `CREATE TABLE`s fall back to `public`, where the least-privilege app SP
-    can't create and startup crashes ("permission denied for schema public"). The app SP owns the
-    schema it creates (it has CREATE on the database). Idempotent; sync (uses operational_pool).
-    No-op when the memory schema is unset (the store/checkpointer then default to public anyway)."""
+    """Create the LangGraph agent-memory schema if absent, owned by the connecting role. The
+    checkpointer + store are configured with schema=<lakebase_memory_schema>, but databricks_langchain
+    does NOT create it — so when it's absent their unqualified `CREATE TABLE`s fall back to `public`,
+    where the least-privilege app SP can't create and startup crashes ("permission denied for schema
+    public"). The app SP owns the schema it creates (it has CREATE on the database). Idempotent; sync
+    (uses operational_pool). No-op when the memory schema is unset (the store/checkpointer then
+    default to public anyway). Fails loud if the schema exists but is foreign-owned — otherwise
+    checkpointer.setup() crashes later with a confusing error."""
     schema = settings.lakebase_memory_schema
     if not schema:
         return
     with operational_pool().connection() as conn, conn.cursor() as cur:
-        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        _ensure_role_owned_schema(
+            cur,
+            schema,
+            label="agent-memory",
+            consequence="the checkpointer/store can't create their tables and the agent can't persist state",
+            fatal=True,
+        )
         conn.commit()
 
 
@@ -181,7 +272,7 @@ def _durable_schema_name() -> str:
 
 def ensure_durable_schema() -> None:
     """Make the connecting role own the durable long-running response schema BEFORE the library
-    lazily creates it — and loudly flag the case where it can't.
+    lazily creates it — and loudly flag (without crashing) the case where it can't.
 
     `databricks_ai_bridge.long_running` persists background/durable responses (the `responses` +
     `messages` tables behind background mode and its stale-response scanner) to a HARD-CODED schema
@@ -192,62 +283,21 @@ def ensure_durable_schema() -> None:
     "permission denied for schema agent_server" and background mode is broken.
 
     Running this (as the SP) before the durable `init_db()` makes the SP create+own the schema on a
-    fresh branch, so the library's later create is a harmless no-op. If the schema already exists
-    owned by a DIFFERENT principal (an already-polluted branch) we can't fix it here — a role can't
-    reassign a schema it doesn't own — so we log a loud, actionable remediation instead of letting it
-    resurface as a buried recurring traceback. Idempotent; sync (uses operational_pool)."""
-    schema = _durable_schema_name()
+    fresh branch, so the library's later create is a harmless no-op. NON-fatal: if the schema is
+    already foreign-owned (a polluted shared branch) we log the remediation but let the app start —
+    only background mode degrades; the core sync/poll path still works. Idempotent; sync."""
     with operational_pool().connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT pg_catalog.pg_get_userbyid(nspowner) AS owner "
-            "FROM pg_catalog.pg_namespace WHERE nspname = %s",
-            (schema,),
+        _ensure_role_owned_schema(
+            cur,
+            _durable_schema_name(),
+            label="durable response",
+            consequence=(
+                "the durable long-running store (background mode + its stale-response scanner) will "
+                "fail every iteration with 'permission denied'"
+            ),
+            fatal=False,
         )
-        row = cur.fetchone()
-        owner = row["owner"] if row else None
-
-        if owner is None:
-            # Fresh branch — create it so the connecting role (the SP on Databricks) owns it.
-            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-            conn.commit()
-            logger.info("Created durable response schema %r (owned by the connecting role)", schema)
-            return
-
-        cur.execute("SELECT current_user AS role")
-        current_role = cur.fetchone()["role"]
-        if owner == current_role:
-            logger.debug("Durable response schema %r already owned by the connecting role", schema)
-            return
-
-        # Foreign-owned (typically created by a developer's local run against the shared branch).
-        # The connecting role can't reassign a schema it doesn't own, and `ALTER … OWNER TO <sp>`
-        # ALSO fails for the owner unless it can SET ROLE to the SP (membership it usually lacks) —
-        # so surface the two remediations an *owner* CAN run without SET ROLE: GRANT access to the
-        # SP (keeps ownership), or DROP + let the SP recreate+own it on restart (the clean fix).
-        grants = "\n".join(
-            [
-                f'GRANT USAGE, CREATE ON SCHEMA {schema} TO "{current_role}";',
-                f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema} TO "{current_role}";',
-                f'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {schema} TO "{current_role}";',
-                f'ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{current_role}";',
-                f'ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "{current_role}";',
-            ]
-        )
-        logger.error(
-            "Durable response schema %r is owned by %r, not the connecting role %r — the durable "
-            "long-running store (background mode + its stale-response scanner) will fail with "
-            "'permission denied for schema %s'. Fix, as %r (the owner; `ALTER … OWNER TO` the SP "
-            "needs SET-ROLE membership the owner usually lacks): either GRANT the SP access —\n%s\n"
-            "— or, for clean SP ownership, `DROP SCHEMA %s CASCADE;` then restart the app so the SP "
-            "recreates+owns it.",
-            schema,
-            owner,
-            current_role,
-            schema,
-            owner,
-            grants,
-            schema,
-        )
+        conn.commit()
 
 
 def _resolved_qty(action: PlannedAction, decision: Optional[ActionDecision]) -> float | None:
