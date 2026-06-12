@@ -89,7 +89,7 @@ def test_ensure_writeback_creates_the_writeback_schema_not_public():
 # ── The synced READ path stays on the operational schema (`public`) ───────────────────────────
 
 def test_operational_tool_schema_is_operational_not_writeback():
-    # The hybrid read query (quality_incidents + inventory_current + open_pos + user_access) reads
+    # The hybrid read query (quality_incidents + inventory_current + open_pos) reads
     # the synced tables in `public` — it must NOT follow the write-back move.
     assert operational_tool._SCHEMA == settings.lakebase_operational_schema
     assert operational_tool._SCHEMA != settings.lakebase_writeback_schema

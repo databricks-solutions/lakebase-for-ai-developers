@@ -69,7 +69,7 @@ flowchart TB
     op1["create_operational_schema"]
     op2["generate_operational_data"]
     op3["pre_seed_pgvector<br/>public.quality_incidents (1024-d HNSW cosine)"]
-    op4["sync_to_lakebase<br/>inventory_current / open_pos / user_access / dims"]
+    op4["sync_to_lakebase<br/>inventory_current / open_pos / dims"]
     op5["verify_hybrid_query"]
     op6["grant_app_sp<br/>SELECT+USAGE on public to App SP"]
     op1 --> op2 --> op3 --> op4 --> op5
@@ -172,9 +172,8 @@ The original ASCII sketch is superseded by that diagram.
   checkpoint makes a run resumable across app restarts.
 - **On-behalf-of-user (OBO) auth** for Knowledge (Vector Search) and Analytics (Genie), via the
   app's `user_api_scopes`. The Operational agent runs as the **App service principal** against
-  Lakebase and enforces access scope as a predicate inside its SQL (the
-  `JOIN user_access ua ON ua.scope = m.category AND ua.user_id = …` join — see Diagram 4 and the
-  Operational-agent section).
+  Lakebase, so every authenticated app user sees the same UC-governed data — there is no per-user
+  row scoping (see the Operational-agent section for the production options).
 
 ## State, memory & the pgvector path — LangGraph + Lakebase integration
 
@@ -228,12 +227,12 @@ holds references (every superstep serializes the full snapshot).
 ## The Operational agent — similarity + SQL joins in one query
 
 The differentiator: when a question needs **semantic similarity as one predicate inside a
-relational/operational query**, run it against the same Lakebase backend so similarity + joins +
-access scope resolve in ONE governed SQL statement — instead of pulling IDs from a vector index
-and round-tripping to Postgres to join, re-filter, and re-check access.
+relational/operational query**, run it against the same Lakebase backend so similarity + joins
+resolve in ONE governed SQL statement — instead of pulling IDs from a vector index and
+round-tripping to Postgres to join and re-filter.
 
-**Canonical case.** *"Similar quality issues for this supplier, scoped to product codes I can
-access, joined to on-hand inventory and open POs."*
+**Canonical case.** *"Similar quality issues for this supplier, joined to on-hand inventory and
+open POs."*
 
 The real query lives in `agent_server/tools/operational_tool.py` (`HYBRID_SQL`, schema-qualified to
 `public` and kept in sync with `data/operational/04_verify_hybrid_query.py`):
@@ -245,19 +244,25 @@ SELECT m.incident_id, m.summary, m.supplier_id, m.sku, m.category,
 FROM public.quality_incidents m
 JOIN public.inventory_current i  ON m.sku = i.sku
 JOIN public.open_pos          po ON m.supplier_id = po.supplier_id AND m.sku = po.sku
-JOIN public.user_access       ua ON ua.scope = m.category AND ua.user_id = %(user_id)s
 WHERE m.expired_at IS NULL
 ORDER BY m.embedding <=> %(q)s::vector
 LIMIT 5;
 ```
 
 The similarity predicate runs over `public.quality_incidents` — a NATIVE pgvector table
-(1024-d, HNSW, cosine) pre-seeded via the `databricks-gte-large-en` embedding endpoint; the access
-scope is the in-query `JOIN user_access ua ON ua.scope = m.category AND ua.user_id = …` predicate.
-The relational tables (`inventory_current`, `open_pos`, `user_access`, plus `suppliers` /
-`product_dim` / `supplier_status` dims) reach Lakebase via **Synced Tables** — the two live tables
-follow `LAKEBASE_SYNC_MODE` (Snapshot by default for the static demo, flip to Continuous/CDF for a
-live-update demo); the dims are always Snapshot — so the joins hit fresh OLTP rows.
+(1024-d, HNSW, cosine) pre-seeded via the `databricks-gte-large-en` embedding endpoint. The query
+runs as the **App service principal**, so every authenticated app user sees the same UC-governed
+data (no per-user row scoping; see the access-control note below). The relational tables
+(`inventory_current`, `open_pos`, plus `suppliers` / `product_dim` / `supplier_status` dims) reach
+Lakebase via **Synced Tables** — the two live tables follow `LAKEBASE_SYNC_MODE` (Snapshot by
+default for the static demo, flip to Continuous/CDF for a live-update demo); the dims are always
+Snapshot — so the joins hit fresh OLTP rows.
+
+> **Access control.** A demo-only `user_access` ACL + an in-query `JOIN user_access ON
+> ua.user_id = …` predicate used to scope rows per user, but it silently returned zero rows for any
+> user not seeded by the data-gen job (every FE/customer), so it was removed. Per-user product-code
+> scoping in production would be Postgres RLS keyed on `current_user()` (with per-user/OBO DB
+> connections) or an entitlements join driven by a real identity source — not an app-side ACL table.
 
 ## Lakebase vs Mosaic AI Vector Search
 
@@ -293,7 +298,7 @@ re-engage on an edit; the approve/edit/reject verdict feeds long-term memory. Th
 - **Observability:** MLflow tracing autologged across nodes (span, model, cost, latency). Eval
   dimensions: routing correctness, retrieval relevance, operational SQL/join correctness,
   recommendation quality, escalation correctness. The Operational agent **returns its generated
-  SQL** so the join and access scope are traceable and scorable.
+  SQL** so the join is traceable and scorable.
 
 ## Helpful resources
 

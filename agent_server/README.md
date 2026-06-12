@@ -52,7 +52,7 @@ than failing the run, and emits its generated SQL where applicable for traceabil
 
 | Agent (node) | Backend | Auth |
 |---|---|---|
-| Operational (`gather_operational`) | Lakebase hybrid SQL — pgvector `quality_incidents` JOIN `inventory_current`/`open_pos` + in-query `user_access` access-scope predicate, one statement ([`tools/operational_tool.py`](tools/operational_tool.py)) | **App service principal** (Lakebase OAuth) |
+| Operational (`gather_operational`) | Lakebase hybrid SQL — pgvector `quality_incidents` JOIN `inventory_current`/`open_pos`, one statement ([`tools/operational_tool.py`](tools/operational_tool.py)) | **App service principal** (Lakebase OAuth) — same data for every authenticated user |
 | Knowledge (`gather_knowledge`) | Mosaic AI Vector Search, hybrid BM25 + ANN over the document corpus ([`tools/knowledge_tool.py`](tools/knowledge_tool.py)) | **OBO** (forwarded user token); falls back to local U2M / app SP |
 | Analytics (`gather_analytics`) | Genie Conversation API, NL→SQL over governed tables ([`tools/genie_tool.py`](tools/genie_tool.py)) | **OBO**; falls back to app SP / ambient |
 

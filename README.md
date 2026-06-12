@@ -123,9 +123,6 @@ DuPont, safety stock, hold the supplier, prioritize program X*) to elicit them.
    coverage gap?"* → `hydrate_memory` recalls the prior approved decision and the planner cites it.
 3. **Supplier-note scoping** — after an approved Henkel decision, ask an operational question that
    surfaces Henkel again → supplier note recalls only for suppliers the operational query returned.
-4. **Access scope / governance** — switch identity to an out-of-scope user
-   (`planner.bob@databricks.com`, scoped to fasteners/abrasives) and ask the operational SKU-1001
-   question → adhesive rows are filtered out by the in-SQL `user_access` join.
 
 **What to verify in each surface**
 

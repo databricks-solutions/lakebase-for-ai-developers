@@ -71,7 +71,7 @@ def ask_genie_fake(question: str, conversation_id: str | None = None) -> GenieRe
     )
 
 
-def query_operational_fake(question: str, user_id: str) -> OperationalResult:
+def query_operational_fake(question: str) -> OperationalResult:
     return OperationalResult(
         question=question,
         sql="-- STUB: hybrid similarity + join (WS2)",

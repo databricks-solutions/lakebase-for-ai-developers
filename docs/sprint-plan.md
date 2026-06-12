@@ -48,8 +48,8 @@ the HITL pause. If that works on seeded data, the demo is done.
   (`databricks.yml`, App resource, setup/seed job, `dev`/`demo`). Owns the shared state schema,
   agent I/O contracts, and `CLAUDE.md`. Unblocks everyone.
 - **WS2 — Operational data (strongest data eng) — Chandhana.** Synthetic operational tables +
-  Synced Tables into Lakebase; the hybrid SQL (vector similarity + access predicate + join to
-  on-hand/open POs) wrapped as the agent tool. Memory vectors/index are LangGraph-managed via
+  Synced Tables into Lakebase; the hybrid SQL (vector similarity + join to on-hand/open POs)
+  wrapped as the agent tool. Memory vectors/index are LangGraph-managed via
   `AsyncDatabricksStore` (embeddings via the endpoint, not `ai_query`). **Spikes the hybrid query first.**
 - **WS3 — Genie (+ Vector Search if promoted) — Ram / Kylie.** Genie space + Conversation API
   wrapper for the Analytics agent; VS index + Knowledge agent as the stretch.

@@ -14,10 +14,16 @@ It is a demo that shows how to build a **stateful agent on Databricks with Lakeb
 memory, session/tool state, and operational semantic retrieval in one Postgres backend — and
 when to use **Lakebase + LangGraph** vs **Mosaic AI Vector Search**.
 
-**Canonical demo scenario:** *"Show me similar quality issues for this supplier, scoped to the
-product codes I can access, joined to on-hand inventory and open POs"* → recommendation → gate
-→ HITL approval → commit, visible as one MLflow trace and resumable from the Lakebase checkpoint
-across the pause.
+**Canonical demo scenario:** *"Show me similar quality issues for this supplier, joined to on-hand
+inventory and open POs"* → recommendation → gate → HITL approval → commit, visible as one MLflow
+trace and resumable from the Lakebase checkpoint across the pause.
+
+> **Access control:** operational reads run as the app **service principal**, so every
+> authenticated app user sees the same UC-governed data. Per-user product-code scoping is
+> intentionally **out of scope** — it was a demo-only `user_access` ACL that silently returned
+> nothing for any unseeded user (every FE/customer). In production it would be added via Postgres
+> RLS keyed on `current_user()` (with per-user/OBO DB connections) or an entitlements join driven
+> by a real identity source.
 
 ## Architecture
 
@@ -34,8 +40,8 @@ End-to-end diagrams: [`docs/architecture.md` → End-to-end architecture](docs/a
 The **gather phase** has three sibling retrieval/data agents:
 
 - **Operational — Lakebase.** Semantic similarity as *one predicate* in a governed relational
-  query that joins live operational rows (inventory, open POs, access scope) in a single SQL
-  statement. Output: rows with operational context.
+  query that joins live operational rows (inventory, open POs) in a single SQL statement. Output:
+  rows with operational context.
 - **Knowledge — Mosaic AI Vector Search.** Large, slow-changing unstructured corpus (contracts,
   SOPs, risk/incident reports). Output: passages for grounding.
 - **Analytics — Genie.** NL→SQL aggregation over governed tables, via the Genie Conversation
@@ -63,8 +69,8 @@ client**:
   serves semantic search over stored memory. Holds preferences, prior approvals, learned
   supplier notes; hydrated at run start, written at commit.
 - **Operational hybrid query.** For the canonical scenario, query the same Lakebase backend
-  directly so vector similarity + SQL joins + access scope resolve in one governed statement —
-  rather than pulling IDs from a vector index and round-tripping to Postgres to join and re-filter.
+  directly so vector similarity + SQL joins resolve in one governed statement — rather than pulling
+  IDs from a vector index and round-tripping to Postgres to join and re-filter.
 
 ```python
 from databricks.sdk import WorkspaceClient
@@ -193,8 +199,9 @@ Every `databricks` CLI command needs the profile (`--profile <p>` or `DATABRICKS
 - **One stub/mock per agent** so workstreams build/test in isolation.
 - **Small, contract-respecting PRs.**
 - **Keep `interrupt()` out of parallel steps.**
-- **Auth:** on-behalf-of-user (OBO) / OAuth. The Operational agent returns its generated SQL so
-  the join and access scope are traceable and scorable.
+- **Auth:** on-behalf-of-user (OBO) / OAuth for Knowledge (Vector Search) + Genie; the Operational
+  agent + Lakebase use the app service principal. The Operational agent returns its generated SQL
+  so the join is traceable and scorable.
 - **DABs carve-out:** the Genie space is not a clean DABs resource — create it manually and
   reference it as an app resource.
 

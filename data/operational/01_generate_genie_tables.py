@@ -4,8 +4,8 @@
 # MAGIC
 # MAGIC Populates the 5 Genie tables (`suppliers`, `product_dim`, `inventory`, `purchase_orders`,
 # MAGIC `supplier_status`) created empty by `data/genie/01_create_operational_schema.py`, and
-# MAGIC materializes three gold helper tables the operational hybrid query / Synced Tables use:
-# MAGIC `inventory_current`, `open_pos`, `user_access`.
+# MAGIC materializes two gold helper tables the operational hybrid query / Synced Tables use:
+# MAGIC `inventory_current`, `open_pos`.
 # MAGIC
 # MAGIC All rows come from `data/operational/seeds.py` (fixed RNG seed + hand-set hero rows), so this
 # MAGIC is deterministic and idempotent — re-running overwrites with identical data. The hero
@@ -40,14 +40,9 @@ from pyspark.sql.types import (
 from agent_server.config import settings
 from data._spark import get_spark
 from data.operational import seeds
-from data.operational._lakebase import resolve_demo_user
 
 # Same code locally (Databricks Connect) and on Databricks (ambient session).
 spark = get_spark()
-
-# In-scope planner identity for the ACL — the current user (or DEMO_PLANNER_USER), not hardcoded.
-DEMO_USER = resolve_demo_user()
-print(f"Demo (in-scope) planner: {DEMO_USER}")
 
 # COMMAND ----------
 CATALOG = settings.uc_catalog
@@ -143,7 +138,6 @@ write_table(
 # COMMAND ----------
 # ── Gold helper tables (joined by the operational hybrid query; synced to Lakebase) ──────────
 # inventory_current / open_pos change with operations → Continuous sync → CDF enabled.
-# user_access is a slow ACL mapping → Snapshot sync → no CDF needed.
 write_table(
     "inventory_current",
     seeds.build_inventory_current(),
@@ -166,19 +160,10 @@ write_table(
     enable_cdf=True,
 )
 
-write_table(
-    "user_access",
-    seeds.build_user_access(DEMO_USER),
-    StructType([
-        StructField("user_id", StringType(), False),
-        StructField("scope", StringType(), False),
-    ]),
-)
-
 # COMMAND ----------
 # ── Verify: row counts, hero values, FK integrity ───────────────────────────────────────────
 for t in ("suppliers", "product_dim", "inventory", "purchase_orders", "supplier_status",
-          "inventory_current", "open_pos", "user_access"):
+          "inventory_current", "open_pos"):
     cnt = spark.table(f"{CATALOG}.{SCHEMA}.{t}").count()  # noqa: F821
     print(f"  {CATALOG}.{SCHEMA}.{t}: {cnt} rows")
 

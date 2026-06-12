@@ -28,7 +28,7 @@ from agent_server.contracts import (
 class AgentState(TypedDict, total=False):
     # ── Input ────────────────────────────────────────────────────────────────────────────
     question: str  # the user's message
-    user_id: str  # OBO; threaded through to operational + audit
+    user_id: str  # caller identity — namespaces long-term memory + audit write-back
 
     # ── Short-term memory (WS1): conversational history accumulated per thread via the ───
     # checkpointer. The entrypoints append a HumanMessage per turn; the planner appends an
