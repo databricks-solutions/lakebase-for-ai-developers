@@ -81,15 +81,17 @@ def embed_query(text: str) -> list[float]:
 
 # ── Meridian write-back tables (the structured commit target) ─────────────────────────────
 # Native Lakebase Postgres tables (NOT synced tables — the agent writes them directly at
-# commit). They live in the operational schema alongside `quality_incidents` so the demo's
-# Lakebase tab shows the human's decision as real relational rows. DDL mirrors the style of
-# data/operational/02_pre_seed_pgvector.py; CREATE IF NOT EXISTS so it's idempotent and the
-# seed scripts that fully own `quality_incidents` are untouched.
+# commit). They live in the SP-owned write-back schema (`lakebase_writeback_schema`), NOT the
+# operational schema: the app service principal CREATEs + OWNs everything it writes here, so the
+# deployed (least-privilege) SP can create them at startup. `public` stays SELECT-only for the SP
+# (synced read tables). DDL mirrors the style of data/operational/02_pre_seed_pgvector.py;
+# CREATE IF NOT EXISTS so it's idempotent and the seed scripts that own the synced/operational
+# tables are untouched.
 
-_SCHEMA = settings.lakebase_operational_schema
+_WRITEBACK_SCHEMA = settings.lakebase_writeback_schema
 
 _DDL_APPROVED_ACTIONS = f"""
-    CREATE TABLE IF NOT EXISTS {_SCHEMA}.approved_actions (
+    CREATE TABLE IF NOT EXISTS {_WRITEBACK_SCHEMA}.approved_actions (
       action_key   text NOT NULL,
       thread_id    text NOT NULL,
       kind         text,
@@ -107,7 +109,7 @@ _DDL_APPROVED_ACTIONS = f"""
 """
 
 _DDL_PLANNING_PARAMETERS = f"""
-    CREATE TABLE IF NOT EXISTS {_SCHEMA}.planning_parameters (
+    CREATE TABLE IF NOT EXISTS {_WRITEBACK_SCHEMA}.planning_parameters (
       thread_id    text NOT NULL,
       sku          text NOT NULL,
       parameter    text NOT NULL DEFAULT 'safety_stock',
@@ -121,7 +123,7 @@ _DDL_PLANNING_PARAMETERS = f"""
 """
 
 _DDL_CONSTRAINTS = f"""
-    CREATE TABLE IF NOT EXISTS {_SCHEMA}.constraints (
+    CREATE TABLE IF NOT EXISTS {_WRITEBACK_SCHEMA}.constraints (
       thread_id      text NOT NULL,
       constraint_key text NOT NULL,
       kind           text DEFAULT 'allocation',
@@ -139,11 +141,28 @@ _WRITEBACK_DDL = (_DDL_APPROVED_ACTIONS, _DDL_PLANNING_PARAMETERS, _DDL_CONSTRAI
 
 
 def ensure_writeback_tables() -> None:
-    """Idempotently create the three Meridian write-back tables. Sync (uses operational_pool)."""
+    """Idempotently create the SP-owned write-back schema + the three Meridian write-back tables.
+    Sync (uses operational_pool). The schema-qualified DDL overrides the pool's operational
+    search_path, so running it through operational_pool() is fine."""
     with operational_pool().connection() as conn, conn.cursor() as cur:
-        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_SCHEMA}")
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_WRITEBACK_SCHEMA}")
         for ddl in _WRITEBACK_DDL:
             cur.execute(ddl)
+        conn.commit()
+
+
+def ensure_memory_schema() -> None:
+    """Create the LangGraph agent-memory schema if absent. The checkpointer + store are configured
+    with schema=<lakebase_memory_schema>, but databricks_langchain does NOT create it — so when it's
+    absent their unqualified `CREATE TABLE`s fall back to `public`, where the least-privilege app SP
+    can't create and startup crashes ("permission denied for schema public"). The app SP owns the
+    schema it creates (it has CREATE on the database). Idempotent; sync (uses operational_pool).
+    No-op when the memory schema is unset (the store/checkpointer then default to public anyway)."""
+    schema = settings.lakebase_memory_schema
+    if not schema:
+        return
+    with operational_pool().connection() as conn, conn.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         conn.commit()
 
 
@@ -251,7 +270,7 @@ def build_writeback_rows(
 # INSERT ... ON CONFLICT (pk) DO UPDATE — idempotent on resume/retry. One per table; the column
 # lists match build_writeback_rows' dict keys exactly.
 _UPSERT_APPROVED_ACTIONS = f"""
-    INSERT INTO {_SCHEMA}.approved_actions
+    INSERT INTO {_WRITEBACK_SCHEMA}.approved_actions
       (action_key, thread_id, kind, po_id, supplier_id, sku, qty, cost_delta, status, rationale, user_id)
     VALUES
       (%(action_key)s, %(thread_id)s, %(kind)s, %(po_id)s, %(supplier_id)s, %(sku)s, %(qty)s,
@@ -263,7 +282,7 @@ _UPSERT_APPROVED_ACTIONS = f"""
 """
 
 _UPSERT_PLANNING_PARAMETERS = f"""
-    INSERT INTO {_SCHEMA}.planning_parameters
+    INSERT INTO {_WRITEBACK_SCHEMA}.planning_parameters
       (thread_id, sku, parameter, old_value, new_value, rationale, user_id)
     VALUES
       (%(thread_id)s, %(sku)s, %(parameter)s, %(old_value)s, %(new_value)s, %(rationale)s, %(user_id)s)
@@ -273,7 +292,7 @@ _UPSERT_PLANNING_PARAMETERS = f"""
 """
 
 _UPSERT_CONSTRAINTS = f"""
-    INSERT INTO {_SCHEMA}.constraints
+    INSERT INTO {_WRITEBACK_SCHEMA}.constraints
       (thread_id, constraint_key, kind, sku, program, detail, rationale, user_id)
     VALUES
       (%(thread_id)s, %(constraint_key)s, %(kind)s, %(sku)s, %(program)s, %(detail)s,
@@ -320,6 +339,7 @@ __all__ = [
     "embed_query",
     "vector_literal",
     "ensure_writeback_tables",
+    "ensure_memory_schema",
     "build_writeback_rows",
     "write_committed_actions",
 ]

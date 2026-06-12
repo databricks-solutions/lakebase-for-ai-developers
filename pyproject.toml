@@ -75,3 +75,11 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+# Integration tests (tests/integration/) talk to a live Lakebase + the agent server and are
+# SKIPPED by default — tests/conftest.py auto-skips them unless RUN_INTEGRATION=1 and Lakebase
+# coords are configured. Everything else is offline.
+markers = [
+    "integration: requires a live Lakebase (skipped by default)",
+]

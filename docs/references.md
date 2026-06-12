@@ -56,6 +56,17 @@ All code, demo, and doc links for the Supply-Chain Planner Copilot. Curated from
 - Postgres clients: https://docs.databricks.com/aws/en/oltp/projects/postgres-clients
 - Autoscaling: https://docs.databricks.com/aws/en/oltp/projects/autoscaling
 - Scale to zero: https://docs.databricks.com/aws/en/oltp/projects/scale-to-zero
+- Create Postgres roles (`databricks_create_role`, manual GRANTs):
+  https://docs.databricks.com/aws/en/oltp/projects/postgres-roles
+
+### Apps + Lakebase (granting the App SP its DB access)
+- **Our implemented design: [`lakebase-apps-permissions.md`](lakebase-apps-permissions.md)** — the
+  hybrid we ship (native `postgres` app resource for role+CONNECT+CREATE; seed-job `grant_app_sp`
+  task for SELECT on the synced `public` tables; SP self-creates its memory + write-back schemas),
+  autoscaling ⇒ `postgres` key (not `database`), CLI ≥0.294, gotchas + dated citations.
+- Add a Lakebase resource to a Databricks app: https://docs.databricks.com/aws/en/dev-tools/databricks-apps/lakebase
+- App resource types + privileges: https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources
+- DABs resources (`postgres` vs `database` keys): https://docs.databricks.com/aws/en/dev-tools/bundles/resources
 
 ### Agents, Genie, models
 - Stateful agents (checkpointer/store on Lakebase): https://docs.databricks.com/aws/en/generative-ai/agent-framework/stateful-agents

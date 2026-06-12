@@ -541,7 +541,9 @@ _STATE_TABLE_QUERIES = {
 async def state_tables(request: Request, thread_id: str) -> dict[str, Any]:
     """Read the Meridian write-back rows for one thread + the caller's recalled approval memory."""
     caller = caller_identity(request)
-    schema = settings.lakebase_operational_schema
+    # Write-back tables (approved_actions / planning_parameters / constraints) live in the SP-owned
+    # write-back schema, NOT the operational/synced schema (`public`). See operational_db._WRITEBACK_SCHEMA.
+    schema = settings.lakebase_writeback_schema
     result: dict[str, Any] = {
         "thread_id": thread_id,
         "approved_actions": [],
