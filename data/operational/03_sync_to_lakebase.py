@@ -190,6 +190,14 @@ def main() -> None:
         }
         print(f"  creating {policy} synced table: {target}")
         result = _run(["postgres", "create-synced-table", target, "--json", json.dumps(spec)])
+        if result.returncode != 0 and "already exists" in f"{result.stderr}{result.stdout}".lower():
+            # Orphaned backing table: a prior synced table was deleted at the resource level (so
+            # get-synced-table returned not-found above) yet left its read-only pg table behind, and
+            # create refuses to overwrite it. Drop the orphan + retry once so re-deploys onto an
+            # already-seeded workspace stay idempotent (the fresh-workspace path never hits this).
+            print(f"    ↻ destination pg table orphaned; dropping {pg_schema}.{table} + retrying")
+            _drop_pg_table(table, pg_schema)
+            result = _run(["postgres", "create-synced-table", target, "--json", json.dumps(spec)])
         if result.returncode != 0:
             # The CLI reports the cause on stderr or stdout — surface both (empty stderr alone hid
             # a "schema does not exist" error before). Record so the task fails loudly at the end.

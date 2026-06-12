@@ -59,6 +59,17 @@ _original_lifespan = app.router.lifespan_context
 async def _lifespan(app):
     try:
         async with lakebase_context(LAKEBASE_CONFIG) as (checkpointer, store):
+            # The SP self-provisions its agent-memory schema BEFORE the checkpointer/store set up.
+            # They're configured with schema=<memory_schema> but databricks_langchain doesn't create
+            # it — absent, their unqualified CREATE TABLEs fall back to `public`, where the
+            # least-privilege app SP can't create → startup crash. The SP has CREATE on the DB.
+            try:
+                from agent_server.operational_db import ensure_memory_schema
+
+                await asyncio.to_thread(ensure_memory_schema)
+            except Exception as exc:  # noqa: BLE001 — best-effort; local superuser dev creates it implicitly
+                logger.warning("Could not ensure agent-memory schema (checkpointer may hit public): %s", exc)
+
             await checkpointer.setup()
             await store.setup()
             logger.info("Lakebase setup complete (%s)", LAKEBASE_CONFIG.description)

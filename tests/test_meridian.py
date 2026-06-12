@@ -538,3 +538,35 @@ def test_planner_recommendation_and_decision_roundtrip_through_serde():
     assert restored_rec.planned_actions[0].kind == ActionKind.EXPEDITE_PO
     restored_dec = serde.loads_typed(serde.dumps_typed(decision))
     assert restored_dec.action_decisions[0].edited_qty == 600
+
+
+# ── Write-back schema move: build_writeback_rows is a PURE seam (schema move is DB-side only) ──
+
+def test_build_writeback_rows_unaffected_by_writeback_schema_move():
+    """The write-back tables moved to the SP-owned `lakebase_writeback_schema` (out of `public`),
+    but that's a DDL/connection concern — `build_writeback_rows` is pure row-shaping and must still
+    key its output by the logical table names (approved_actions / planning_parameters / constraints),
+    NOT by any schema-qualified name. Regression guard for the schema move."""
+    rows = build_writeback_rows(THREAD, USER, "because gap", {}, _planned())
+    assert set(rows.keys()) == {"approved_actions", "planning_parameters", "constraints"}
+    # No schema qualification leaked into the row-dict keys.
+    for table in rows:
+        assert "." not in table
+    # Row dicts carry plain (unqualified) column names — the schema lives only in the DDL/upsert SQL.
+    assert all("sku" in r for r in rows["planning_parameters"])
+    assert all("action_key" in r for r in rows["approved_actions"])
+
+
+def test_config_three_lakebase_schemas_pairwise_distinct():
+    """operational (`public`, synced reads) / memory (LangGraph-owned) / write-back (SP-owned app
+    schema) must be three DIFFERENT schemas — collapsing any pair re-introduces the
+    'permission denied for schema public' startup crash the move fixed."""
+    from agent_server.config import settings
+
+    schemas = {
+        "operational": settings.lakebase_operational_schema,
+        "memory": settings.lakebase_memory_schema,
+        "writeback": settings.lakebase_writeback_schema,
+    }
+    assert all(schemas.values()), f"all three schemas must be set: {schemas}"
+    assert len(set(schemas.values())) == 3, f"schemas must be pairwise distinct: {schemas}"

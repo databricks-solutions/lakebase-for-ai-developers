@@ -31,10 +31,10 @@ which the bundle ships via `sync.include`.
 ## 2. Prerequisites
 
 ### Tooling (your laptop)
-- [ ] **Databricks CLI** ≥ 0.230 (`databricks -v`)
+- [ ] **Databricks CLI** ≥ 0.294 (`databricks -v`) — required for the native `postgres` app resource
+      (older CLIs treat the `postgres` resource key as an unknown field and the deploy fails)
 - [ ] **Node.js 18+** and npm (builds the SPA)
 - [ ] **uv** (`pip install uv`) — used by the App runtime and local runs
-- [ ] **psql** (only if you run `scripts/grant_app_sp.sh` for the Lakebase grants)
 
 ### Workspace facts to collect
 You'll plug these into the bundle variables in §4:
@@ -57,8 +57,15 @@ You'll plug these into the bundle variables in §4:
 ## 3. Create the Lakebase project (one-time)
 
 The agent's durable state (checkpoints + long-term memory) and the operational hybrid query live
-in Lakebase autoscaling Postgres. Create a project (UI: **Compute → Lakebase → Create**, or the
-`databricks-lakebase-autoscale` skill / CLI):
+in Lakebase autoscaling Postgres.
+
+> **`make deploy` now ensures the project exists for you** (idempotent) via a `make lakebase-project`
+> step (`scripts/ensure_lakebase_project.py`) that runs before the bundle deploy — so the native
+> `postgres` app resource always has a project/branch/database to bind to. The manual create below
+> is still useful if you want to pre-create the project or pick non-default names.
+
+Create a project (UI: **Compute → Lakebase → Create**, or the `databricks-lakebase-autoscale`
+skill / CLI):
 
 ```bash
 # PROJECT_ID is a positional argument (not a --project-id flag).
@@ -71,6 +78,11 @@ This auto-creates a `production` branch, a `primary` endpoint, and the `databric
 database — which match the bundle defaults (`lakebase_project` / `lakebase_branch` /
 `lakebase_endpoint` / `lakebase_database`). If you use different names, set the matching variables
 in §4.
+
+> **You need `CAN MANAGE` on the Lakebase project** — the deploy attaches a native `postgres` app
+> resource to it (which auto-registers the App SP's Postgres role + grants CONNECT/CREATE), and
+> attaching the resource requires `CAN MANAGE`. Workspace admins have it; otherwise grant it on the
+> project. See §6.A.
 
 That's the only Lakebase prerequisite. You do **not** need to register the Lakebase database as a
 separate UC catalog — the operational synced tables land in **`uc_catalog`** (schema `public`), and
@@ -92,7 +104,7 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 | `vector_search_endpoint` | `supply-chain-planner-vs` | VS endpoint name (created by the seed job) |
 | `embedding_endpoint` | `databricks-gte-large-en` | a Databricks embedding endpoint |
 | `llm_endpoint` | `databricks-claude-opus-4-8` | a Foundation Model endpoint |
-| `genie_space_id` | `unset` (sentinel) | leave as-is for the first deploy; set the real id **after** the seed creates the space (§5, post-deploy step 2). The app treats `unset` as no-Genie. |
+| `genie_space_id` | `unset` (sentinel) | leave as-is for the first deploy; set the real id **after** the seed creates the space (§5, post-deploy step). The app treats `unset` as no-Genie. |
 | `sql_warehouse_id` | `unset` (sentinel) | **set a real warehouse id to enable MLflow tracing + 👍/👎** (UC trace storage needs a warehouse). Leave `unset` = tracing off. Also grant the App SP `CAN USE` on it + the §6.B catalog grants. |
 
 > Bundle variables that feed app env vars must **never default to an empty string** — DABs drops
@@ -116,41 +128,37 @@ make deploy PROFILE=<p> VARS="uc_catalog=<your-writable-catalog>"
 make deploy PROFILE=<p> VARS="uc_catalog=<catalog> lakebase_project=<your-project-id>"
 ```
 
-> **Whatever you pass as `lakebase_project` here, pass the same to `grant_app_sp.sh`** in the
-> post-deploy step (`LAKEBASE_PROJECT=<your-project-id> …`) — otherwise it targets the default
-> project and errors with *Project 'projects/mfg-supply-chain-copilot' not found*.
-
 The seed job is **fully serverless and self-contained** — every data script runs through the
 `data/_seed_task.py` launcher (which fixes `sys.path` + injects config, since serverless tasks
 get no env vars and no `__file__`), the bundle creates all schemas it needs (including the Lakebase
 `public` schema), and `sync_to_lakebase` creates the synced tables via the **REST API** (the
 `databricks` CLI is blocked on serverless compute). No manual schema/table creation is required.
 
-That wrapper runs four steps (raw equivalents are in the header of `databricks.yml`):
+The App SP's Lakebase access is **fully automatic** — there is no manual grant step:
+- The native **`postgres` app resource** (in `databricks.yml`) makes the platform register the SP's
+  Postgres role and grant it `CONNECT` + `CREATE` on the database, so the SP self-creates and owns
+  its agent-memory + write-back schemas at startup.
+- The seed's **`grant_app_sp` task** then `GRANT`s the SP `USAGE` + `SELECT` on the synced `public`
+  tables (the one thing the resource can't — those tables are platform-owned). It runs **after**
+  `sync_to_lakebase` and after the app is deployed, so the tables and the SP both already exist.
+
+That wrapper runs these steps (raw equivalents are in the header of `databricks.yml`):
 1. `npm --prefix frontend ci && npm --prefix frontend run build` → `frontend/dist`
-2. `databricks bundle deploy -t dev --profile <p>` → uploads source + creates the app **object**, experiment, job
-3. `databricks bundle run supply_chain_planner -t dev --profile <p>` → **deploys the app** (creates the active deployment that points it at the source and makes it live)
-4. `databricks bundle run setup_and_seed -t dev --profile <p>` → loads demo data
+2. `make lakebase-project` (`scripts/ensure_lakebase_project.py`) → ensures the Lakebase project exists (idempotent)
+3. `databricks bundle deploy -t dev --profile <p>` → uploads source + creates the app **object**, experiment, job
+4. `databricks bundle run supply_chain_planner -t dev --profile <p>` → **deploys the app** (creates the active deployment that points it at the source and makes it live; this is also when the `postgres` resource registers the SP's Postgres role)
+5. `databricks bundle run setup_and_seed -t dev --profile <p>` → loads demo data + the `grant_app_sp` SELECT grant
 
-> **Why step 3 is separate:** `bundle deploy` does *not* deploy an app — it only creates the app
-> object (the shell). The app stays "No source code / Unavailable" until `bundle run <app-key>`
-> (= `apps deploy`) creates a deployment. `make deploy` does this for you; if you ever run the raw
-> commands, don't skip it.
+> **Why deploying the app is a separate step (step 4):** `bundle deploy` does *not* deploy an app —
+> it only creates the app object (the shell). The app stays "No source code / Unavailable" until
+> `bundle run <app-key>` (= `apps deploy`) creates a deployment. `make deploy` does this for you; if
+> you ever run the raw commands, don't skip it.
 
-Then the **two post-deploy steps** (these can't be DABs resources):
+Then there is **one post-deploy step** (a carve-out that can't be a DABs resource — the App SP's
+Lakebase grants are now handled automatically by the `postgres` resource + the `grant_app_sp` seed
+task, so they are **no longer** a manual step):
 
-1. **Grant the App's service principal a Lakebase Postgres role** (the App SP only exists after the
-   first deploy, so this is a follow-up):
-   ```bash
-   PROFILE=<p> ./scripts/grant_app_sp.sh
-   # If you renamed the Lakebase project, pass it (must match the bundle's lakebase_project):
-   #   LAKEBASE_PROJECT=mfg-supply-chain-copilot-test PROFILE=<p> ./scripts/grant_app_sp.sh
-   ```
-   The script resolves the App SP, registers it as a Postgres role, and runs the GRANTs. It reads
-   `LAKEBASE_PROJECT` / `LAKEBASE_BRANCH` / `LAKEBASE_ENDPOINT` from env (defaults match §3); or add
-   the role via the Lakebase **UI** (instance → Roles) and re-run.
-
-2. **Wire the Genie space.** The Genie space is a carve-out — it isn't a DABs resource, so it's a
+1. **Wire the Genie space.** The Genie space is a carve-out — it isn't a DABs resource, so it's a
    two-phase wire-up. The first deploy ran with `genie_space_id` blank; the seed's
    `create_genie_space` task **created** a Genie space and printed its id. Grab that id and redeploy
    the app (only) with it set, so the Analytics (NL→SQL) route binds.
@@ -197,11 +205,14 @@ message. *Transcripts persist going forward only* — chats created before this 
 
 ## 6. Permissions checklist
 
-Three identities are involved. **The bundle automates one grant** (the experiment); the rest are
-listed with the exact commands. Minimal-permission by design: **data reads run on-behalf-of-user
-(OBO)**, so the App service principal needs *no* SELECT on the demo tables — only the user does.
+Three identities are involved. **The bundle + seed automate the App-SP grants** (the experiment,
+the Lakebase role/CONNECT/CREATE via the `postgres` resource, and the operational SELECT via the
+`grant_app_sp` seed task); the rest are listed with the exact commands. Minimal-permission by
+design: **user-facing data reads run on-behalf-of-user (OBO)**, so the App SP needs *no* grant on
+Genie, the VS index, or the user's UC tables — only the user does.
 
 ### A. You — the deployer (runs `make deploy`)
+- [ ] **Databricks CLI ≥ 0.294** — required for the native `postgres` app resource (see §2)
 - [ ] **Apps** entitlement — create/deploy Databricks Apps
 - [ ] **Serverless** — *Can use* serverless compute (the seed job runs serverless)
 - [ ] **Workflows/Jobs** — create jobs (default for workspace users)
@@ -212,7 +223,9 @@ listed with the exact commands. Minimal-permission by design: **data reads run o
       GRANT USE CATALOG, CREATE SCHEMA ON CATALOG <uc_catalog> TO `you@databricks.com`;
       ```
       (or own the catalog / be metastore admin)
-- [ ] **Lakebase** — create a project (§3) — workspace admin or the Lakebase entitlement
+- [ ] **Lakebase** — create a project (§3) — workspace admin or the Lakebase entitlement, **and**
+      **`CAN MANAGE` on the Lakebase project** so the deploy can attach the `postgres` app resource
+      (which auto-registers the App SP's Postgres role). Workspace admins have this.
 - [ ] **Vector Search** — create an endpoint + index — VS entitlement + `CREATE` on `<uc_catalog>.<uc_schema>`
 - [ ] **Genie** — create a Genie space — Genie entitlement + `CAN MANAGE` on a SQL warehouse
 - [ ] **SQL warehouse** — `CAN USE` (Genie, VS sync, the verify task, tracing)
@@ -222,8 +235,17 @@ Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `s
 
 - [x] **MLflow experiment `CAN_MANAGE`** — **automated by the bundle** (the `experiment`
       app-resource in `databricks.yml`); the SP writes traces here
-- [ ] **Lakebase Postgres role** with `CONNECT` + `CREATE` — registered by `scripts/grant_app_sp.sh`
-      (the App creates its own memory schema + checkpoint tables). *Manual, post-first-deploy.*
+- [x] **Lakebase role + `CONNECT` + `CREATE`** — **automated by the `postgres` app-resource** in
+      `databricks.yml`: the platform registers the SP's Postgres role (role name == its client-id
+      UUID) and grants CONNECT/CREATE on the database, so the SP self-creates + owns its
+      **agent-memory schema** (LangGraph checkpoint + store) and its **write-back schema**
+      `supply_chain_planner_app` (`approved_actions` / `planning_parameters` / `constraints`) at
+      startup. *No manual step.* (Rare fallback if the role hasn't propagated: SQL
+      `SELECT databricks_create_role('<app-sp-client-id>','SERVICE_PRINCIPAL');` on the branch.)
+- [x] **Lakebase `USAGE` + `SELECT` on `public` (the synced operational tables)** — **automated by
+      the seed's `grant_app_sp` task** (a superuser GRANT — the synced read tables are owned by the
+      platform's `databricks_writer_*` role, not the SP, so the resource can't cover them). Runs
+      after `sync_to_lakebase`, re-resolving the SP each run.
 - [ ] **Foundation Model endpoints** `CAN QUERY` on `<llm_endpoint>` **and** `<embedding_endpoint>`
       — the planner/router and the long-term-memory store run as the App SP
       (usually granted to all principals by default; verify in *Serving → endpoint → Permissions*)
@@ -276,17 +298,18 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | Symptom | Cause / fix |
 |---|---|
 | `/ui` returns "SPA not built" | `frontend/dist` wasn't shipped. Run `make deploy` (it builds first), not a raw `bundle deploy`. |
-| App `password authentication failed` (Lakebase) | App SP has no Postgres role → run `scripts/grant_app_sp.sh` (or add the role in the Lakebase UI). |
+| App `password authentication failed` / `role "<uuid>" does not exist` (Lakebase) | The `postgres` app resource didn't register the SP's Postgres role — confirm the resource is attached (`databricks.yml` app `resources:` has the `postgres` block) and the deployer has **`CAN MANAGE` on the Lakebase project** (§6.A), then **redeploy the app** (`databricks bundle run supply_chain_planner -t <target> -p <p>`). Rare fallback: add the role in the Lakebase UI or run SQL `SELECT databricks_create_role('<app-sp-client-id>','SERVICE_PRINCIPAL');`. |
+| App can't **read the synced tables** / `permission denied for table inventory_current` (or other `public.*`) | The `grant_app_sp` seed task didn't run, or the SP lacks `SELECT` on `public`. The `postgres` resource grants CONNECT/CREATE but **not** SELECT on platform-owned synced tables — that's the `grant_app_sp` task's job (depends on `sync_to_lakebase`). Re-run `make seed` (check the `grant_app_sp` task succeeded in the job UI). |
+| App can't **create its schema** at startup / `permission denied for database` (memory or write-back schema) | The `postgres` app resource isn't attached, or `lakebase_database_resource` is wrong so the resource bound to the wrong database (no CREATE granted). Verify the internal resource name: `databricks api get /api/2.0/postgres/projects/<p>/branches/<b>/databases` (deterministic kebab-case of the db name, e.g. `databricks-postgres`), set `lakebase_database_resource` to match, and redeploy. |
 | Knowledge route errors "VECTOR_SEARCH_INDEX not set" | The `build_vs_index` seed task didn't finish, or `uc_catalog`/`uc_schema` mismatch. Re-run `make seed`. |
-| Analytics/Genie route says no space | `genie_space_id` still blank → set it from the `create_genie_space` task output + redeploy (§5, post-deploy step 2). |
+| Analytics/Genie route says no space | `genie_space_id` still blank → set it from the `create_genie_space` task output + redeploy (§5, post-deploy step). |
 | Traces don't appear | `sql_warehouse_id` blank (tracing off), or the App SP lacks the trace-schema grants in §6.B. |
 | Seed task seeds the wrong catalog | The task config is the JSON arg the bundle passes to `data/_seed_task.py` → `os.environ` → `agent_server.config`. Check the task's run parameters in the job UI match your `uc_catalog`. |
 | `sync_to_lakebase` fails: `Schema '<catalog>.public' does not exist` | `bootstrap_schemas` didn't run / a stale deploy — it creates `<uc_catalog>.public`. Re-run `make seed`. |
 | `sync_to_lakebase` fails: `The Databricks CLI is only supported ... web terminal` | A stale deploy without the fix — `03` must use the REST API path (`data/operational/03_sync_to_lakebase.py` via the SDK), not the CLI. Re-deploy. |
 | `bundle deploy` fails: `Cannot move node '… -traces' … because it is in trash folder` | You deleted the bundle-managed MLflow experiment but it's still in the workspace **trash**, and DABs' local state still tracks it. Fastest fix: `databricks experiments restore-experiment <id> -p <p>` then re-deploy. For a truly fresh experiment: permanently delete it (MLflow → Experiments → **Trash** → Delete permanently — UI only) **and** `rm -rf .databricks/bundle/<target>`, then re-deploy. |
-| `grant_app_sp.sh`: `Project 'projects/mfg-supply-chain-copilot' not found` | The script used the default project name. Pass the one you deployed with: `LAKEBASE_PROJECT=<your-project-id> PROFILE=<p> ./scripts/grant_app_sp.sh`. |
 | `bundle deploy` fails: `workspace_id mismatch` | Stale local state from a prior workspace. `rm -rf .databricks/bundle/<target>` and re-deploy (note: this also makes DABs forget the app/job/experiment it created — delete those on the workspace first if they still exist). |
-| App shows **"No source code" / "No active deployment"** but Status: Active | `bundle deploy` only created the app *object*; it doesn't deploy the app. Deploy it: `databricks bundle run supply_chain_planner -t <target> --profile <p> <--var …>`. `make deploy` now runs this automatically (step 3). |
+| App shows **"No source code" / "No active deployment"** but Status: Active | `bundle deploy` only created the app *object*; it doesn't deploy the app. Deploy it: `databricks bundle run supply_chain_planner -t <target> --profile <p> <--var …>`. `make deploy` now runs this automatically (step 4). |
 | `bundle run <app>` fails: `Must specify environment variable source using either value or valueFrom` | An app env var resolved to an **empty string** — DABs drops the value, leaving a name-only entry Apps rejects. Don't let any bundle variable that feeds app env default to `""` (use a sentinel like `unset`, or omit the env var). All current vars are fixed; if you add one, give it a non-empty default. |
 | "Inspect backend" / chat shows a **502** (raw HTML) right after deploy | Cold start — the worker is still warming behind the proxy (`/api/*` is briefly unavailable). The UI retries automatically; just wait ~15–30s and retry. Only a 502 that persists once the app is **warm** is a real error (check Apps UI → Logs). |
 | **No traces / 👍👎 in the experiment** (Traces tab + UC trace tables empty) | UC tracing isn't enabled. Need all of: `sql_warehouse_id` set to a real warehouse; App SP `CAN USE` that warehouse; and the §6.B `USE CATALOG` + trace-schema grants. App logs `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` or `UC tracing OFF: no SQL warehouse set`. Fix, then **redeploy** (setup runs at startup). Non-fatal — the app still works. |

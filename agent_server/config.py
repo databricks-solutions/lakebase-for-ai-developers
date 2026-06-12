@@ -133,8 +133,19 @@ class Settings(BaseModel):
     # Postgres schema holding the operational tables (the pre-seeded pgvector `quality_incidents`
     # plus the synced relational tables) — kept together so the hybrid query joins without
     # cross-schema qualification. Distinct from `lakebase_memory_schema` (LangGraph-owned).
+    # The app SP only gets SELECT/USAGE here (granted by the seed); the synced tables are owned by
+    # the platform's `databricks_writer_*` role, not the SP.
     lakebase_operational_schema: str = Field(
         default="public", alias="LAKEBASE_OPERATIONAL_SCHEMA"
+    )
+    # Postgres schema for the app's OWN write-back tables (approved_actions / planning_parameters /
+    # constraints — the Meridian HITL commit target). Kept SEPARATE from `lakebase_operational_schema`
+    # (`public`) on purpose: the app SP must CREATE + own these, and it can only do that in a schema
+    # it owns. The `postgres` app resource grants the SP CREATE-on-database, so it self-creates this
+    # schema at startup (operational_db.ensure_writeback_tables) and owns everything it writes — no
+    # `CREATE ON SCHEMA public` needed. Distinct from the LangGraph-owned `lakebase_memory_schema`.
+    lakebase_writeback_schema: str = Field(
+        default="supply_chain_planner_app", alias="LAKEBASE_WRITEBACK_SCHEMA"
     )
     # Local-dev escape hatch (Pattern 3): a full postgresql:// URL. Never commit a real one.
     lakebase_pg_url: str | None = Field(default=None, alias="LAKEBASE_PG_URL")

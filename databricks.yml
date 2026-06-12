@@ -36,6 +36,13 @@ sync:
     - app.yaml
 
 variables:
+  # --- App ---
+  # The Databricks App name. Single source of truth — drives both the app resource's `name` and the
+  # seed job's APP_NAME (so the grant_app_sp task resolves the app's SP). Rename in one place.
+  app_name:
+    description: Name of the deployed Databricks App.
+    default: supply-chain-planner
+
   # --- Unity Catalog: the Genie/operational Delta source + the Knowledge volume & VS index. ---
   uc_catalog:
     description: Catalog holding the operational Delta tables, Knowledge volume, VS index, and trace schema. Must already exist and be writable by the deployer.
@@ -58,6 +65,9 @@ variables:
   lakebase_database:
     description: Lakebase Postgres database.
     default: databricks_postgres
+  lakebase_database_resource:
+    description: "Internal Lakebase database resource name for the `postgres` app resource — deterministic kebab-case of `lakebase_database`; verify with `databricks api get /api/2.0/postgres/projects/<p>/branches/<b>/databases`."
+    default: databricks-postgres
   # NOTE: the operational synced tables live in uc_catalog (schema `public`), NOT a separate
   # Lakebase-registered catalog — the synced-table spec carries its own branch + postgres_database,
   # so a plain writable catalog works and the bundle creates the `public` schema in it. One catalog
@@ -118,7 +128,7 @@ resources:
 
   apps:
     supply_chain_planner:
-      name: "supply-chain-planner"
+      name: ${var.app_name}
       description: "Multi-agent supply-chain planner copilot — LangGraph on Apps, Lakebase state, OBO, MLflow tracing, chat UI at /ui"
       source_code_path: ./
 
@@ -165,6 +175,8 @@ resources:
             value: ${var.lakebase_database}
           - name: LAKEBASE_AGENT_MEMORY_SCHEMA
             value: "supply_chain_planner_memory_app"
+          - name: LAKEBASE_WRITEBACK_SCHEMA
+            value: "supply_chain_planner_app"
           - name: LAKEBASE_OPERATIONAL_SCHEMA
             value: "public"
           - name: LAKEBASE_UC_CATALOG
@@ -195,12 +207,23 @@ resources:
           - name: LOG_LEVEL
             value: ${var.log_level}
 
-      # App-SP resource grants. Only the experiment (tracing telemetry) — data surfaces are OBO.
+      # App-SP resource grants. The experiment (tracing telemetry) + the native `postgres` Lakebase
+      # resource; the OTHER data surfaces (Genie/VS/UC reads) are OBO. The `postgres` resource makes
+      # the Apps platform auto-register the App SP's Postgres role (role name == its client-id UUID)
+      # and grant it CONNECT + CREATE on the database — so the SP can create + own its own schemas
+      # (agent memory + write-back) at startup with NO manual role-registration or CREATE grant.
+      # (It does NOT grant SELECT on the synced operational tables in `public`, which the platform
+      # owns — that stays a manual superuser GRANT, done by the seed's grant_app_sp task.)
       resources:
         - name: 'experiment'
           experiment:
             experiment_id: ${resources.experiments.planner_experiment.id}
             permission: 'CAN_MANAGE'
+        - name: lakebase
+          postgres:
+            branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
+            database: projects/${var.lakebase_project}/branches/${var.lakebase_branch}/databases/${var.lakebase_database_resource}
+            permission: CAN_CONNECT_AND_CREATE
 
   # Setup-and-seed job — loads the demo dataset. Run it for demo samples; skip it to bring your
   # own data. Two independent chains after the schema bootstrap: operational (Lakebase) + knowledge
@@ -220,7 +243,7 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/00_bootstrap_schemas.py
-              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}"}'
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","APP_NAME":"${var.app_name}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---
@@ -265,6 +288,19 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/operational/04_verify_hybrid_query.py
+              - *seed_cfg
+          environment_key: seed
+        # Grant the deployed App's service principal SELECT/USAGE on the operational (`public`)
+        # synced tables — the one bit the `postgres` app resource can't cover (those tables are
+        # owned by the platform, not the SP). The resource already handles role registration +
+        # CONNECT + CREATE. Needs the synced tables to exist (→ sync_to_lakebase) and the app to be
+        # deployed — make deploy deploys the app before the seed, so the SP exists.
+        - task_key: grant_app_sp
+          depends_on: [{ task_key: sync_to_lakebase }]
+          spark_python_task:
+            python_file: ./data/_seed_task.py
+            parameters:
+              - data/operational/05_grant_app_sp.py
               - *seed_cfg
           environment_key: seed
         # Genie space only needs the operational Delta tables — decoupled from the Lakebase

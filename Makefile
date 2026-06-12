@@ -5,8 +5,10 @@
 #   make deploy PROFILE=<cli-profile> TARGET=demo      # clean prod-style names (default: dev)
 #   make build   / make validate / make seed / make destroy
 #
-# Prereqs (one-time, see docs/DEPLOY.md): a CLI profile pointed at your workspace, a Lakebase
-# autoscaling project, a writable UC catalog, Node 18+ for the SPA build.
+# Prereqs (one-time, see docs/DEPLOY.md): a CLI profile pointed at your workspace, a writable UC
+# catalog, Node 18+ for the SPA build, and the Databricks CLI >= 0.294 (the `postgres` app resource
+# + autoscaling Lakebase project APIs need it). The Lakebase autoscaling project is now created
+# automatically by `make lakebase-project` (the first step of `make deploy`) — no manual setup.
 
 TARGET ?= dev
 SEED   ?= true
@@ -32,11 +34,20 @@ build:
 validate: _require_profile
 	databricks bundle validate -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 
+# Get-or-create the Lakebase autoscaling project (idempotent) and wait until it's AVAILABLE, so a
+# fresh workspace is truly one-shot — no manual `databricks postgres create-project` prereq. The
+# `postgres` app resource + the synced tables both target this project, so it must exist BEFORE
+# `bundle deploy`. PROFILE flows through as DATABRICKS_CONFIG_PROFILE for the SDK credential chain.
+# If you point the bundle at a non-default project (VARS="lakebase_project=<id>"), pass the same id
+# here so the project that gets created matches: make deploy ... LAKEBASE_PROJECT=<id> VARS="...".
+lakebase-project: _require_profile
+	DATABRICKS_CONFIG_PROFILE=$(PROFILE) LAKEBASE_PROJECT=$(LAKEBASE_PROJECT) uv run python scripts/ensure_lakebase_project.py
+
 # Build + deploy the App/experiment, then seed demo data unless SEED=false.
 # NOTE: `bundle deploy` only uploads source + creates the app OBJECT (the shell). It does NOT
 # create an app DEPLOYMENT — that needs `bundle run <app-key>` (= apps deploy), which points the
 # app at the source and makes it live. Without this the app shows "No source code / Unavailable".
-deploy: _require_profile build
+deploy: _require_profile lakebase-project build
 	databricks bundle deploy -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
 	@echo "==> deploying the app (creates the active deployment; bundle deploy only made the shell)"
 	databricks bundle run supply_chain_planner -t $(TARGET) --profile $(PROFILE) $(VAR_FLAGS)
@@ -62,4 +73,4 @@ seed: _require_profile
 destroy: _require_profile
 	databricks bundle destroy -t $(TARGET) --profile $(PROFILE)
 
-.PHONY: _require_profile build validate deploy seed destroy
+.PHONY: _require_profile build validate lakebase-project deploy seed destroy
