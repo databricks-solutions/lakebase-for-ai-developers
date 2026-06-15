@@ -98,11 +98,13 @@ The LangGraph topology with real node names (`build_graph.py`). `supervisor` fan
 edge → list) to the gather siblings in one superstep; they fan in on `hydrate_memory`; the planner
 is **sequential** today (per-SKU/supplier `Send` fan-out is P2); `gate_router` conditionally routes
 to `hitl_review` (the durable `interrupt()`) or straight to `commit`. Each gather node is annotated
-with its backend + auth.
+with its backend + auth. Both `supervisor` and `planner` read the thread's recent conversation
+history from the checkpointer (short-term memory), so follow-ups resolve in context — router
+history-awareness is gated by `ROUTER_USE_HISTORY` (default on).
 
 ```mermaid
 flowchart TB
-  start((START)) --> sup["supervisor (router · haiku-4-5)"]
+  start((START)) --> sup["supervisor (router · haiku-4-5)<br/>history-aware routing"]
 
   sup -->|conditional fan-out| gk["gather_knowledge<br/>Vector Search · OBO"]
   sup -->|conditional fan-out| ga["gather_analytics<br/>Genie · OBO"]
@@ -183,7 +185,12 @@ connection pooling, and vector index for you. You do not hand-manage a pgvector 
 - **Short-term — `AsyncCheckpointSaver`.** Thread/session state and checkpoints, one thread per
   planning session. The whole state snapshots every superstep; per-task pending writes mean a
   partial-failure resume doesn't re-run already-succeeded gather branches (no recompute of
-  expensive Genie / store / Vector Search calls). HITL `interrupt()` resumes from here.
+  expensive Genie / store / Vector Search calls). HITL `interrupt()` resumes from here. It also
+  holds the thread's **conversation history** (`messages`, `add_messages` reducer): the recent
+  window — `short_term_keep_recent` (6) turns — is rendered into both the **router** (history-aware
+  routing, gated by `ROUTER_USE_HISTORY`, default on) and the **planner** prompts so follow-up
+  referents ("their pricing terms", "that SKU") resolve in context. The full log is checkpointed;
+  only the window is rendered (older turns dropped, not summarized).
 - **Long-term + semantic — `AsyncDatabricksStore`.** A Lakebase-backed LangGraph Postgres store
   with embeddings configured via a Databricks **embedding endpoint** (`embedding_endpoint`,
   `embedding_dims`, `embedding_fields`). **This is the pgvector path** — internally it builds an
@@ -218,7 +225,8 @@ the agent remember across threads, and what semantically similar memories should
 
 ### LangGraph state discipline
 Gather agents write **distinct** state keys (no reducer) — `knowledge_result`, `analytics_result`,
-`operational_result`. The planner is **sequential** today: it composes a single `recommendation`
+`operational_result`. The one reducer in play is `add_messages` on `messages` (the short-term
+conversation log; see above). The planner is **sequential** today: it composes a single `recommendation`
 (`PlannerRecommendation`) plus its ordered, per-action `PlannedAction`s into one state key (no
 reducer needed). Per-SKU/supplier planner fan-out via `Send` — which would need a reducer over a
 shared list key — is a **P2** item, not the current shape. Bulk payloads go to side tables; state
