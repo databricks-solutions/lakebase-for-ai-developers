@@ -9,6 +9,8 @@ The demo proves Lakebase's value to the **technical GenAI/ML persona** (memory s
 latency, scalability, I/O) and lands a defensible opinion on **Lakebase pgvector vs Mosaic AI
 Vector Search**.
 
+![Agentic Apps Architecture](docs/diagrams/Agentic_Apps_Architecture.001.png)
+
 > **Status: P0 core loop landed end-to-end, P1 in progress.** The full graph runs against real
 > Databricks backends *and* in-memory stubs: supervisor routing (LLM + keyword fallback), the
 > three gather agents (Knowledge → Vector Search, Analytics → Genie, Operational → Lakebase
