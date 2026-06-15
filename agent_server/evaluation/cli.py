@@ -341,6 +341,13 @@ def main():
         )
         return
 
+    if "--routing-multiturn" in args:
+        # Multi-turn routing A/B (history OFF vs ON). In-process graph + MemorySaver + USE_STUBS,
+        # so it needs no Lakebase — imported lazily to keep the common path light.
+        from agent_server.evaluation.routing_multiturn import run_routing_multiturn
+        run_routing_multiturn()
+        return
+
     flywheel_flags = ("--layer", "--fast", "--full", "--flywheel", "--update-baseline",
                       "--base-url", "--real-data")
     if not any(f in args for f in flywheel_flags):

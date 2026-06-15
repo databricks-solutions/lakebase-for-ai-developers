@@ -36,6 +36,7 @@ from agent_server.contracts import (
     PlannedAction,
     PlannerRecommendation,
 )
+from agent_server.graph.history import render_history
 from agent_server.graph.state import AgentState
 from agent_server.memory import build_memory_writes, write_memories
 
@@ -441,26 +442,6 @@ def _memory_block(state: AgentState) -> str:
     return "\n\n".join(parts)
 
 
-def _history_block(state: AgentState) -> str:
-    """Render the recent conversation turns into a compact prompt context (WS1 short-term memory).
-
-    The current turn's question is passed to the planner separately, so exclude it here and show
-    only the prior turns — trimmed to the last `short_term_keep_recent` (older turns are dropped,
-    not summarized, for now). This lets follow-ups resolve referents ("that SKU", "the same
-    supplier") from earlier in the same conversation."""
-    msgs = state.get("messages") or []
-    prior = msgs[:-1]  # drop the just-appended HumanMessage for the current question
-    if not prior:
-        return ""
-    recent = prior[-settings.short_term_keep_recent:]
-    lines = []
-    for m in recent:
-        role = "User" if getattr(m, "type", "") == "human" else "Assistant"
-        content = m.content if isinstance(m.content, str) else str(m.content)
-        lines.append(f"  {role}: {content[:300]}")
-    return "Earlier in this conversation:\n" + "\n".join(lines)
-
-
 def _llm_draft(question: str, evidence: str, memory: str = "", history: str = "") -> _PlannerDraft | None:
     """Try the LLM planner. Returns None on any failure so the caller can fall back."""
     try:
@@ -546,7 +527,7 @@ def planner_node(state: AgentState) -> dict:
     question = state.get("question", "")
     evidence = _evidence_block(state)
     memory = _memory_block(state)
-    history = _history_block(state)
+    history = render_history(state)
     if w := _stream_writer():
         w({"kind": "substep", "node": "planner", "label": "Composing recommendation…"})
     draft = _llm_draft(question, evidence, memory, history) or _fallback_draft(state, question)

@@ -121,6 +121,12 @@ class Settings(BaseModel):
     # as context. Trim-only for now — the full history is checkpointed per thread, but only the
     # last N are rendered into the planner prompt (older turns are dropped, not summarized yet).
     short_term_keep_recent: int = Field(default=6, alias="SHORT_TERM_KEEP_RECENT")
+    # Whether the supervisor/router sees recent conversation history (the same `short_term_keep_recent`
+    # window the planner uses) so referential follow-ups ("and their pricing terms?", "what about that
+    # SKU?") route correctly. On by default. Set false to restore single-turn (question-only) routing —
+    # the escape hatch for A/B'ing the feature or if history ever skews routing. First turns are
+    # unaffected either way (no prior history ⇒ identical question-only prompt).
+    router_use_history: bool = Field(default=True, alias="ROUTER_USE_HISTORY")
     # Autoscaling ("projects") connection form — set instead of instance-name for autoscaling.
     # _lakebase.connect() (02/04) accepts EITHER a full resource path here
     # (projects/<p>/branches/<b>/endpoints/<id>) OR a bare endpoint id that it combines with the

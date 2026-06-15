@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from agent_server.config import settings
 from agent_server.contracts import RouterDecision
+from agent_server.graph.history import recent_user_text, render_history
 from agent_server.graph.state import AgentState
 
 
@@ -60,6 +61,15 @@ POs" — only add analytics when the question asks for an AGGREGATE across many 
 total, count, ranking, or trend).
 </boundary>
 
+<conversation_history>
+The user message may contain a <conversation_history> block before the <current_question>.
+When present, the current question is often a follow-up whose referents ("their", "that SKU",
+"those", "the same supplier", "and the pricing terms?") point at earlier turns. Use the history
+ONLY to resolve those referents and understand what the CURRENT question is asking — then route
+for what THIS turn needs. Do NOT re-select an agent just because a prior turn used it: a
+follow-up about contract terms routes to knowledge even if the previous turn was operational.
+</conversation_history>
+
 The planner's OWN prior decisions are ALWAYS recalled from long-term memory after the
 gather phase, so you never route to memory. For questions that refer to earlier
 conversations ("what did we decide…", "continue this morning's escalation", "yesterday"),
@@ -90,8 +100,13 @@ reasoning: The market-event note is a document (knowledge) and the similar past 
 """
 
 
-def _llm_route(question: str) -> RouterDecision | None:
-    """Try the LLM route. Returns None on any failure so the caller can fall back."""
+def _llm_route(question: str, history: str = "") -> RouterDecision | None:
+    """Try the LLM route. Returns None on any failure so the caller can fall back.
+
+    When `history` is present, prepend it as a <conversation_history> block and wrap the current
+    question in <current_question> so the router can resolve follow-up referents while still
+    routing for the current turn. With no history the prompt is byte-identical to the
+    single-turn path, so first-turn routing is unchanged."""
     try:
         from databricks_langchain import ChatDatabricks
     except ImportError:
@@ -100,42 +115,70 @@ def _llm_route(question: str) -> RouterDecision | None:
         # NB: no temperature — Opus-class reasoning models reject the param (BAD_REQUEST).
         llm = ChatDatabricks(endpoint=settings.llm_router_endpoint)
         structured = llm.with_structured_output(RouterDecision)
+        if history:
+            user_content = (
+                f"<conversation_history>\n{history}\n</conversation_history>\n\n"
+                f"<current_question>\n{question}\n</current_question>"
+            )
+        else:
+            user_content = question
         return structured.invoke(
             [{"role": "system", "content": _SYSTEM_PROMPT},
-             {"role": "user", "content": question}]
+             {"role": "user", "content": user_content}]
         )
     except Exception:
         return None
 
 
-def _keyword_route(question: str) -> RouterDecision:
-    """Deterministic fallback. Keeps the graph runnable without a workspace."""
-    q = question.lower()
+def _keyword_agents(text: str) -> list:
+    """Heuristic keyword → agent mapping over a single text blob. Good enough for stubs/tests."""
+    q = text.lower()
     agents: list = []
-    # Heuristic mapping — good enough for stubs and tests.
     if any(t in q for t in ("contract", "supplier notif", "market event", "promotion", "competitor", "price increase", "raw material")):
         agents.append("knowledge")
     if any(t in q for t in ("total", "sum", "how many", "rank", "top", "trend", "by quarter", "by region", "average", "open po", "on hand", "inventory")):
         agents.append("analytics")
     if any(t in q for t in ("similar", "past quality", "quality issue", "incident", "comparable case", "prior")):
         agents.append("operational")
+    return agents
+
+
+def _keyword_route(question: str, history: str = "") -> RouterDecision:
+    """Deterministic fallback. Keeps the graph runnable without a workspace.
+
+    Scans the current question first; only when it matches NO agent (e.g. a bare referential
+    follow-up like "and their pricing terms?") does it fold in the recent USER-turn history to
+    resolve the referent. Single-turn behavior is therefore unchanged."""
+    agents = _keyword_agents(question)
+    used_history = False
+    if not agents and history:
+        agents = _keyword_agents(f"{question}\n{history}")
+        used_history = bool(agents)
     # Long-term memory is hydrated automatically after gather (not a routable agent), so
     # continuation cues ("what did we decide…") only steer the topical gather agents above.
     if not agents:
         # Default — without LLM and without keyword hits, hit both retrieval surfaces.
         agents = ["knowledge", "analytics"]
-    return RouterDecision(
-        agents=agents,
-        reasoning="keyword-fallback routing (LLM unavailable or no endpoint configured)",
-    )
+    reasoning = "keyword-fallback routing (LLM unavailable or no endpoint configured)"
+    if used_history:
+        reasoning += "; resolved referent from conversation history"
+    return RouterDecision(agents=agents, reasoning=reasoning)
 
 
 def supervisor_node(state: AgentState) -> dict:
     """Set `route_decision` based on the question. The downstream conditional edge
-    fans out to the chosen gather nodes."""
+    fans out to the chosen gather nodes.
+
+    History-aware (gated by `ROUTER_USE_HISTORY`, default on): on a follow-up turn the recent
+    conversation is passed to the router so referential questions ("and their pricing terms?")
+    route correctly. The LLM route sees the full transcript; the keyword fallback sees only the
+    prior user turns (so the assistant's own summaries don't skew keyword matching)."""
     question = state.get("question", "")
-    decision = _llm_route(question) or _keyword_route(question)
-    note = f"supervisor → {decision.agents}: {decision.reasoning}"
+    history = render_history(state) if settings.router_use_history else ""
+    user_history = recent_user_text(state) if settings.router_use_history else ""
+    decision = _llm_route(question, history) or _keyword_route(question, user_history)
+    hist_marker = "used" if history else "none"
+    note = f"supervisor → {decision.agents} (history={hist_marker}): {decision.reasoning}"
     notes = state.get("trace_notes", []) or []
     notes = [*notes, note]
     if w := _stream_writer():
