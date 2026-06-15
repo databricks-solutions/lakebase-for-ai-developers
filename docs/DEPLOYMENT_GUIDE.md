@@ -106,12 +106,13 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 | `embedding_endpoint` | `databricks-gte-large-en` | a Databricks embedding endpoint |
 | `llm_endpoint` | `databricks-claude-opus-4-8` | a Foundation Model endpoint |
 | `genie_space_id` | `unset` (sentinel) | leave as-is for the first deploy; set the real id **after** the seed creates the space (§5, post-deploy step). The app treats `unset` as no-Genie. |
-| `sql_warehouse_id` | `unset` (sentinel) | **set a real warehouse id to enable MLflow tracing + 👍/👎** (UC trace storage needs a warehouse). Leave `unset` = tracing off. Also grant the App SP `CAN USE` on it + the §6.B catalog grants. |
+| `sql_warehouse_id` | the **bundle-created** `app_sql_warehouse` (small serverless wh) | leave as-is — the bundle creates + binds the warehouse (App SP auto-granted `CAN USE`; trace-schema grants run in the seed). Pass `--var sql_warehouse_id=<id>` to BYO an existing/governed warehouse. |
 
 > Bundle variables that feed app env vars must **never default to an empty string** — DABs drops
 > empty values and the Apps API rejects the resulting name-only entry. That's why `genie_space_id`
-> uses the `unset` sentinel, and why there's no `sql_warehouse_id` var (UC tracing works without a
-> pinned warehouse; to pin one, add `MLFLOW_TRACING_SQL_WAREHOUSE_ID` to the app env explicitly).
+> uses the `unset` sentinel. `sql_warehouse_id` sidesteps it differently: it defaults to a
+> bundle-created warehouse resource and reaches the app through a `sql_warehouse` resource binding
+> (`value_from`), not a raw env value — so there's always a real id (and the App SP gets `CAN USE`).
 
 ---
 
@@ -222,7 +223,10 @@ Genie, the VS index, or the user's UC tables — only the user does.
       (which auto-registers the App SP's Postgres role). Workspace admins have this.
 - [ ] **Vector Search** — create an endpoint + index — VS entitlement + `CREATE` on `<uc_catalog>.<uc_schema>`
 - [ ] **Genie** — create a Genie space — Genie entitlement + `CAN MANAGE` on a SQL warehouse
-- [ ] **SQL warehouse** — `CAN USE` (Genie, VS sync, the verify task, tracing)
+- [ ] **SQL warehouse** — the bundle **creates** one (`app_sql_warehouse`) for tracing + the seed's
+      Genie/VS SQL, so the deployer needs the entitlement to **create a serverless SQL warehouse**
+      (workspace admins have it). BYO instead with `--var sql_warehouse_id=<id>` (then you just need
+      `CAN USE` on that one); a deployer who can create neither is the byo/Tier-2 case.
 
 ### B. The App service principal (auto-created on first deploy)
 Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `service_principal_client_id`.
@@ -243,17 +247,19 @@ Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `s
 - [ ] **Foundation Model endpoints** `CAN QUERY` on `<llm_endpoint>` **and** `<embedding_endpoint>`
       — the planner/router and the long-term-memory store run as the App SP
       (usually granted to all principals by default; verify in *Serving → endpoint → Permissions*)
-- [ ] **MLflow UC tracing** — required for traces **and the 👍/👎 feedback** to record. Needs THREE
-      things: (a) `sql_warehouse_id` set to a real warehouse (UC trace storage needs one); (b) the
-      App SP `CAN USE` on that warehouse; and (c) the App SP can write the trace tables:
+- [ ] **MLflow UC tracing** — records traces **and the 👍/👎 feedback**. With the bundle defaults
+      this is **automatic**: (a) the bundle creates `app_sql_warehouse` and binds it to the app, so the
+      App SP gets `CAN USE` on the warehouse; and (b) the seed's `grant_app_sp` task grants the App SP
+      the trace-table privileges:
       ```sql
       GRANT USE CATALOG ON CATALOG <uc_catalog> TO `<app-sp-client-id>`;
-      GRANT USE SCHEMA, CREATE TABLE, MODIFY ON SCHEMA <uc_catalog>.<mlflow_trace_schema> TO `<app-sp-client-id>`;
+      GRANT USE SCHEMA, CREATE TABLE, MODIFY, SELECT ON SCHEMA <uc_catalog>.<mlflow_trace_schema> TO `<app-sp-client-id>`;
       ```
-      Missing any of these → the app starts fine but logs a non-fatal `UC trace binding failed …
+      If you BYO a warehouse (`--var sql_warehouse_id=<id>`) the binding still grants `CAN USE`. If
+      anything is missing, the app starts fine but logs a non-fatal `UC trace binding failed …
       PERMISSION_DENIED: … USE CATALOG …` (or `UC tracing OFF: no SQL warehouse set`) and falls back
       to plain tracing, which **doesn't record on Apps** (egress-blocked) — so the experiment's
-      Traces tab and any 👍/👎 stay empty. After granting, **redeploy** so setup re-runs.
+      Traces tab and any 👍/👎 stay empty. After fixing, **redeploy** so setup re-runs.
 - [ ] ❌ **Not needed:** SELECT on the operational/knowledge tables, Genie, or the VS index — those
       run **OBO** as the signed-in user (below).
 
@@ -298,7 +304,7 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | App can't **create its schema** at startup / `permission denied for database` (memory or write-back schema) | The `postgres` app resource isn't attached, or `lakebase_database_resource` is wrong so the resource bound to the wrong database (no CREATE granted). Verify the internal resource name: `databricks api get /api/2.0/postgres/projects/<p>/branches/<b>/databases` (deterministic kebab-case of the db name, e.g. `databricks-postgres`), set `lakebase_database_resource` to match, and redeploy. |
 | Knowledge route errors "VECTOR_SEARCH_INDEX not set" | The `build_vs_index` seed task didn't finish, or `uc_catalog`/`uc_schema` mismatch. Re-run `make seed`. |
 | Analytics/Genie route says no space | `genie_space_id` still blank → set it from the `create_genie_space` task output + redeploy (§5, post-deploy step). |
-| Traces don't appear | `sql_warehouse_id` blank (tracing off), or the App SP lacks the trace-schema grants in §6.B. |
+| Traces don't appear | UC trace bind failed at startup. Check app logs for `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` (seed's trace-schema grants didn't run → re-run `make seed`) or `UC tracing OFF: no SQL warehouse set` (a BYO `--var sql_warehouse_id` was empty/`unset`). The bundle default creates + binds the warehouse, so this is rare. |
 | Seed task seeds the wrong catalog | The task config is the JSON arg the bundle passes to `data/_seed_task.py` → `os.environ` → `agent_server.config`. Check the task's run parameters in the job UI match your `uc_catalog`. |
 | `sync_to_lakebase` fails: `Schema '<catalog>.public' does not exist` | `bootstrap_schemas` didn't run / a stale deploy — it creates `<uc_catalog>.public`. Re-run `make seed`. |
 | `sync_to_lakebase` fails: `The Databricks CLI is only supported ... web terminal` | A stale deploy without the fix — `03` must use the REST API path (`data/operational/03_sync_to_lakebase.py` via the SDK), not the CLI. Re-deploy. |
@@ -307,7 +313,7 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | App shows **"No source code" / "No active deployment"** but Status: Active | `bundle deploy` only created the app *object*; it doesn't deploy the app. Deploy it: `databricks bundle run supply_chain_planner -t <target> --profile <p> <--var …>`. `make deploy` now runs this automatically (step 4). |
 | `bundle run <app>` fails: `Must specify environment variable source using either value or valueFrom` | An app env var resolved to an **empty string** — DABs drops the value, leaving a name-only entry Apps rejects. Don't let any bundle variable that feeds app env default to `""` (use a sentinel like `unset`, or omit the env var). All current vars are fixed; if you add one, give it a non-empty default. |
 | "Inspect backend" / chat shows a **502** (raw HTML) right after deploy | Cold start — the worker is still warming behind the proxy (`/api/*` is briefly unavailable). The UI retries automatically; just wait ~15–30s and retry. Only a 502 that persists once the app is **warm** is a real error (check Apps UI → Logs). |
-| **No traces / 👍👎 in the experiment** (Traces tab + UC trace tables empty) | UC tracing isn't enabled. Need all of: `sql_warehouse_id` set to a real warehouse; App SP `CAN USE` that warehouse; and the §6.B `USE CATALOG` + trace-schema grants. App logs `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` or `UC tracing OFF: no SQL warehouse set`. Fix, then **redeploy** (setup runs at startup). Non-fatal — the app still works. |
+| **No traces / 👍👎 in the experiment** (Traces tab + UC trace tables empty) | UC tracing isn't binding. The bundle default handles all three pieces — the warehouse (created), App SP `CAN USE` (the `trace-warehouse` app binding), and the `USE CATALOG` + trace-schema grants (seed's `grant_app_sp`). So this means one didn't apply: check app logs for `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` (re-run `make seed`) or `UC tracing OFF: no SQL warehouse set` (BYO `--var sql_warehouse_id` empty). Fix, then **redeploy**. Non-fatal — the app still works. Also: the UC destination only binds to a **trace-free** experiment, so re-homing tracing needs a fresh experiment (bump the `planner_experiment_uc` resource **key**). |
 | Clicking a **historical chat** opens an empty panel | Either that chat predates this build (transcripts persist going forward only), or the store read failed (check logs). New chats persist + rehydrate automatically. |
 
 ---
