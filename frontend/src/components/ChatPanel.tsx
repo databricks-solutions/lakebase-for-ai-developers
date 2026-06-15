@@ -2,39 +2,35 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { sendFeedback } from "../api";
 import type { ChatMessage } from "../types";
 
-// The README's Tier 1 / Tier 2 demo questions, verbatim (the seed-data anchors — Henkel,
-// SKU-1001, Q4 2026 — must match exactly). Tier 1 verifies single-engine routing; Tier 2 is
-// the multi-agent hero loop that pauses for HITL approval.
-const QUESTION_GROUPS: { tier: string; blurb: string; items: { q: string; route: string }[] }[] = [
+// The welcome screen leads with the Tier-2 hero loop — multi-component questions that fan out,
+// recommend, and pause for HITL approval — then offers the single-engine routing demos as the
+// clickable engine boxes in the architecture strip below. Questions are verbatim seed-data anchors
+// (Henkel, SKU-1001, Q4 2026 — must match exactly). Chips name the Databricks components touched.
+const HERO_QUESTIONS: { engines: string; q: string }[] = [
   {
-    tier: "Tier 1 · single-engine routing",
-    blurb: "Verify the router picks the right agent.",
-    items: [
-      { q: "What is the total open PO quantity by supplier for Q4 2026?", route: "Analytics · Genie" },
-      { q: "What do our Caterpillar contracts say about late-delivery penalties?", route: "Knowledge · Vector Search" },
-      { q: "Find similar past quality incidents to Henkel's SKU-1001 adhesive cracking.", route: "Operational · Lakebase" },
-      { q: "Which suppliers are currently flagged at risk?", route: "Analytics · Genie" },
-    ],
+    engines: "Lakebase + Genie",
+    q: "Henkel's SKU-1001 has recurring adhesive cracking — show me similar past cases joined to on-hand inventory and open POs, and recommend a mitigation.",
   },
   {
-    tier: "Tier 2 · multi-agent + HITL approval",
-    blurb: "The hero loop — pauses for your approval, then commits.",
-    items: [
-      { q: "Henkel's SKU-1001 has recurring adhesive cracking — show me similar past cases joined to on-hand inventory and open POs, and recommend a mitigation.", route: "Operational + Analytics" },
-      { q: "Nucor announced a carbon-steel price increase. Find related market-event notes and similar past incidents, and recommend whether to pre-buy.", route: "Knowledge + Operational" },
-      { q: "Recommend a mitigation for the SKU-1001 shortage given the Henkel risk, and give me total open POs by supplier for Q4.", route: "Operational + Analytics" },
-    ],
+    engines: "Vector Search + Lakebase",
+    q: "Nucor announced a carbon-steel price increase. Find related market-event notes and similar past incidents, and recommend whether to pre-buy.",
   },
   {
-    tier: "Tier 2b · write-back to Lakebase",
-    blurb: "Approve / edit / hold each action on the Review tab — commits write rows to Lakebase.",
-    items: [
-      { q: "Henkel SKU-1001 keeps cracking — give me a full containment plan: hold the on-hand lot, quarantine the incoming PO, tighten incoming inspection, and hold Henkel until they're re-validated.", route: "all 3 tables" },
-      { q: "Henkel SKU-1001 is failing the adhesion test — quarantine the incoming 500-unit PO and bridge-source a buffer from DuPont.", route: "approved_actions" },
-      { q: "Given the recurring SKU-1001 quality failures, raise the incoming-inspection level and bump safety stock until the defect is contained.", route: "planning_parameters" },
-      { q: "Put a quality hold on Henkel/SUP-001 for SKU-1001 until they pass re-validation, and prioritize the EV inverter program for the constrained on-hand.", route: "constraints" },
-    ],
+    engines: "Lakebase + Genie + Vector Search",
+    q: "Henkel's SKU-1001 keeps cracking — find similar past incidents with their on-hand inventory and open POs, check the latest Henkel structural-adhesive supplier notification, and give me total open POs by supplier for Q4, then recommend a mitigation.",
   },
+  {
+    engines: "Lakebase write-back",
+    q: "Henkel SKU-1001 keeps cracking — give me a full containment plan: hold the on-hand lot, quarantine the incoming PO, tighten incoming inspection, and hold Henkel until they're re-validated.",
+  },
+];
+
+// The three Gather engines, surfaced as clickable boxes in the architecture strip. Each fires a
+// single-engine routing demo so the router pick is verifiable without leaving the welcome screen.
+const ENGINES: { label: string; sub: string; q: string }[] = [
+  { label: "Lakebase", sub: "pgvector + SQL join", q: "Find similar past quality incidents to Henkel's SKU-1001 adhesive cracking." },
+  { label: "Genie", sub: "NL→SQL analytics", q: "What is the total open PO quantity by supplier for Q4 2026?" },
+  { label: "Vector Search", sub: "contracts & SOPs", q: "What do our Caterpillar contracts say about late-delivery penalties?" },
 ];
 
 export function ChatPanel({
@@ -56,6 +52,7 @@ export function ChatPanel({
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (messages.length === 0) return; // keep the welcome screen anchored at the headline, not scrolled to the bottom
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
 
@@ -110,30 +107,63 @@ export function ChatPanel({
 
 function Welcome({ onPick }: { onPick: (s: string) => void }) {
   return (
-    <div style={{ padding: "var(--space-8) 0", animation: "fade-up var(--dur-slow) var(--ease-out)" }}>
+    <div style={{ padding: "var(--space-7) 0", animation: "fade-up var(--dur-slow) var(--ease-out)" }}>
       <div style={{ textAlign: "center" }}>
         <div className="eyebrow">Supply-Chain Planner Copilot</div>
         <h1 style={{ margin: "10px 0 8px" }}>How can I help you plan today?</h1>
-        <p style={{ color: "var(--fg-2)", maxWidth: 520, margin: "0 auto var(--space-6)" }}>
-          Ask about supplier risk, quality issues, inventory and open POs. I route across pgvector,
-          Genie and Vector Search, then propose an action for your approval. Pick an example to start:
+        <p style={{ color: "var(--fg-2)", maxWidth: 540, margin: "0 auto var(--space-6)" }}>
+          A multi-agent planner. I gather across Lakebase, Genie and Vector Search, propose an
+          action, and pause for your approval before anything commits. Here's the loop — then pick
+          a scenario to run it:
         </p>
       </div>
-      <div data-tour="suggestions" style={{ display: "grid", gap: "var(--space-5)", maxWidth: 620, margin: "0 auto" }}>
-        {QUESTION_GROUPS.map((g) => (
-          <div key={g.tier} style={{ display: "grid", gap: 8 }}>
-            <div>
-              <div className="eyebrow">{g.tier}</div>
-              <p style={{ color: "var(--fg-3)", fontSize: "var(--fs-body-sm)", margin: "2px 0 0" }}>{g.blurb}</p>
-            </div>
-            {g.items.map((it) => (
-              <button key={it.q} onClick={() => onPick(it.q)} style={suggestionBtn}>
-                <span style={routeChip}>{it.route}</span>
-                <span>{it.q}</span>
-              </button>
-            ))}
-          </div>
-        ))}
+
+      {/* Orient on the loop first (the architecture strip), then the runnable scenarios below. */}
+      <FlowStrip onPick={onPick} />
+
+      {/* The Tier-2 hero loop — multi-component questions; the router fans out to the engines shown. */}
+      <div style={{ maxWidth: 640, margin: "var(--space-6) auto 0" }}>
+        <div className="eyebrow" style={{ textAlign: "center", marginBottom: 10 }}>
+          Try a scenario · the router fans out
+        </div>
+        <div data-tour="suggestions" style={{ display: "grid", gap: 10 }}>
+          {HERO_QUESTIONS.map((it) => (
+            <button key={it.q} onClick={() => onPick(it.q)} style={heroCard}>
+              <span style={engineChip}>{it.engines}</span>
+              <span style={{ lineHeight: "var(--lh-relaxed)" }}>{it.q}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The "how it runs" architecture strip: Gather → Recommend → ✋ Approve → Commit. The three Gather
+// engine boxes are clickable — each fires a single-engine routing demo, so the strip doubles as the
+// quick-architecture visual and the single-engine launcher.
+function FlowStrip({ onPick }: { onPick: (s: string) => void }) {
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <div className="eyebrow" style={{ textAlign: "center", marginBottom: 10 }}>
+        How it runs · click an engine to try it solo
+      </div>
+      <div style={flowStripWrap}>
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={flowStageLabel}>Gather</div>
+          {ENGINES.map((e) => (
+            <button key={e.label} onClick={() => onPick(e.q)} style={engineBox} title={e.q}>
+              <span style={{ fontWeight: 600 }}>{e.label}</span>
+              <span style={{ color: "var(--fg-3)", fontSize: 11 }}>{e.sub}</span>
+            </button>
+          ))}
+        </div>
+        <span style={flowArrow}>→</span>
+        <div style={flowChip}>Recommend</div>
+        <span style={flowArrow}>→</span>
+        <div style={{ ...flowChip, ...flowChipHighlight }}>✋ You decide</div>
+        <span style={flowArrow}>→</span>
+        <div style={flowChip}>Commit</div>
       </div>
     </div>
   );
@@ -277,16 +307,41 @@ const chip: CSSProperties = {
   fontFamily: "var(--font-mono)", fontSize: 11, padding: "2px 8px",
   borderRadius: "var(--radius-pill)", background: "var(--bg-subtle)", color: "var(--fg-2)",
 };
-const suggestionBtn: CSSProperties = {
-  font: "inherit", textAlign: "left", padding: "12px 16px", borderRadius: "var(--radius-lg)",
+const heroCard: CSSProperties = {
+  font: "inherit", textAlign: "left", padding: "14px 18px", borderRadius: "var(--radius-lg)",
   border: "1px solid var(--border)", background: "var(--bg-canvas)", color: "var(--fg-1)",
   cursor: "pointer", boxShadow: "var(--shadow-sm)",
-  display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start",
+  display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start",
 };
-const routeChip: CSSProperties = {
+const engineChip: CSSProperties = {
   fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em",
-  padding: "2px 8px", borderRadius: "var(--radius-pill)", background: "var(--bg-subtle)", color: "var(--fg-3)",
+  fontWeight: 600, padding: "3px 9px", borderRadius: "var(--radius-pill)",
+  background: "var(--bg-subtle)", color: "var(--db-navy-700)",
 };
+const flowStripWrap: CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "center", gap: 10, flexWrap: "wrap",
+  border: "1px solid var(--border)", borderRadius: "var(--radius-lg)",
+  background: "var(--bg-subtle)", padding: "var(--space-4)",
+};
+const flowStageLabel: CSSProperties = {
+  fontFamily: "var(--font-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em",
+  color: "var(--fg-3)", textAlign: "center",
+};
+const engineBox: CSSProperties = {
+  font: "inherit", textAlign: "left", display: "flex", flexDirection: "column", gap: 1,
+  padding: "6px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)",
+  background: "var(--bg-canvas)", color: "var(--fg-1)", cursor: "pointer", minWidth: 132,
+  fontSize: "var(--fs-body-sm)",
+};
+const flowChip: CSSProperties = {
+  fontSize: "var(--fs-body-sm)", padding: "6px 10px", borderRadius: "var(--radius-md)",
+  border: "1px solid var(--border)", background: "var(--bg-canvas)", color: "var(--fg-2)",
+  whiteSpace: "nowrap",
+};
+const flowChipHighlight: CSSProperties = {
+  borderColor: "var(--db-yellow-600)", background: "#fff8e8", color: "var(--db-yellow-700)", fontWeight: 600,
+};
+const flowArrow: CSSProperties = { color: "var(--fg-3)", fontSize: 18, lineHeight: 1 };
 const peekBtn: CSSProperties = {
   font: "inherit", padding: "8px 16px", borderRadius: "var(--radius-pill)",
   border: "1px solid var(--border-strong)", background: "var(--bg-subtle)", color: "var(--fg-1)", cursor: "pointer",
