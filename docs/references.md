@@ -15,7 +15,7 @@ All code, demo, and doc links for the Supply-Chain Planner Copilot. Curated from
   https://github.com/databricks/app-templates/tree/main/agent-langgraph-advanced
   - Frontend (cloned on demand by `start-app`): https://github.com/databricks/app-templates/tree/main/e2e-chatbot-app-next
   - Key files to copy/adapt: `agent_server/agent.py`, `agent_server/start_server.py`,
-    `agent_server/utils_memory.py`, `databricks.yml`, `app.yaml`, `pyproject.toml`,
+    `agent_server/utils_memory.py`, `databricks.yml`, `pyproject.toml`,
     `scripts/quickstart.py`, `scripts/start_app.py`, `AGENTS.md`.
 - Sibling templates (other orchestration styles): https://github.com/databricks/app-templates
 

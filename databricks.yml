@@ -26,14 +26,9 @@ bundle:
 
 # The built SPA lives in frontend/dist (git-ignored). Force-include it so `bundle deploy` ships it
 # to the App even though .gitignore would otherwise exclude it. Build it first (the Makefile does).
-# Exclude the static app.yaml: under DABs the App config (command + env, below) is authoritative
-# and variable-driven — a synced app.yaml with hardcoded values would shadow it at runtime. The
-# legacy `databricks apps deploy` path (scripts/deploy_app_yau46e.sh) still uses app.yaml directly.
 sync:
   include:
     - frontend/dist/**
-  exclude:
-    - app.yaml
 
 variables:
   # --- App ---
@@ -116,18 +111,45 @@ variables:
   mlflow_trace_prefix:
     description: Table-name prefix for the UC trace tables.
     default: scp
-  # SQL warehouse that backs UC trace storage. REQUIRED for traces (and 👍/👎 feedback) to record on
-  # Databricks Apps — without it, tracing stays off. Defaults to the "unset" sentinel (NOT empty:
-  # DABs drops empty env values and Apps rejects the name-only entry); config treats "unset" as off.
+  # SQL warehouse that backs UC trace storage (and the seed's Genie/knowledge SQL). Defaults to the
+  # bundle-created `app_sql_warehouse` resource below — no hardcoded id, and the app binds it so the
+  # App SP auto-gets CAN_USE. BYO: pass --var sql_warehouse_id=<existing id> to use a governed/existing
+  # warehouse instead. (A deployer who cannot create warehouses at all is the documented byo/Tier-2
+  # case — not handled here; this always creates its own, which auto-stops at ~zero idle cost.)
   sql_warehouse_id:
-    description: SQL warehouse id for MLflow UC tracing. Set a real id to enable traces; "unset" = tracing off.
-    default: a7760b312858e85b
+    description: Warehouse for MLflow UC tracing + seed SQL. Defaults to the bundle-created serverless warehouse; override with an existing warehouse id to BYO.
+    default: ${resources.sql_warehouses.app_sql_warehouse.id}
 
   log_level:
     description: App log level.
     default: INFO
 
 resources:
+  # Bundle-created SQL warehouse backing MLflow UC trace storage (and, via &seed_cfg, the seed's
+  # Genie-space + knowledge SQL). Small + serverless + short auto-stop → ~zero idle cost. The app
+  # binds it (app `resources` below) so the App SP auto-gets CAN_USE and the id is injected into the
+  # env via value_from — no hardcoded warehouse id. `var.sql_warehouse_id` defaults to this; pass
+  # --var sql_warehouse_id=<existing id> to BYO a governed/existing warehouse instead.
+  sql_warehouses:
+    app_sql_warehouse:
+      name: ${bundle.name}-${bundle.target}-wh
+      cluster_size: "2X-Small"          # smallest; trace writes are tiny (the old shared wh was Small)
+      enable_serverless_compute: true   # serverless + PRO, like the prior "Serverless Starter Warehouse"
+      warehouse_type: PRO
+      auto_stop_mins: 10
+      min_num_clusters: 1
+      max_num_clusters: 1
+      tags:
+        custom_tags:
+          - key: app
+            value: ${bundle.name}
+          - key: target
+            value: ${bundle.target}
+          - key: purpose
+            value: mlflow-uc-tracing
+          - key: managed-by
+            value: dabs
+
   # Bundle-managed MLflow experiment — DABs creates a FRESH one per deploy, owned by the deployer.
   # Fresh matters: MLflow's UC trace destination only binds to a trace-free experiment. The App
   # binds to it by id (env MLFLOW_EXPERIMENT_ID, value_from "experiment"), and the experiment
@@ -177,7 +199,9 @@ resources:
           - name: MLFLOW_TRACE_TABLE_PREFIX
             value: ${var.mlflow_trace_prefix}
           - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
-            value: ${var.sql_warehouse_id}   # "unset" sentinel (non-empty) → config treats as off
+            # Injected from the `trace-warehouse` app resource below (the bound warehouse's id); the
+            # binding also auto-grants the App SP CAN_USE on it. No hardcoded id / no env literal.
+            value_from: "trace-warehouse"
 
           # --- Lakebase (autoscaling) — app SP mints OAuth DB creds from these coords ---
           - name: LAKEBASE_AUTOSCALING_PROJECT
@@ -242,6 +266,14 @@ resources:
           experiment:
             experiment_id: ${resources.experiments.planner_experiment_uc.id}
             permission: 'CAN_MANAGE'
+        # SQL warehouse backing UC trace storage. Binding it grants the App SP CAN_USE on the
+        # warehouse AND injects its id into the env (MLFLOW_TRACING_SQL_WAREHOUSE_ID, value_from
+        # "trace-warehouse"). id = ${var.sql_warehouse_id}, which defaults to the bundle-created
+        # `app_sql_warehouse` above (or a BYO id via --var).
+        - name: trace-warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
         - name: lakebase
           postgres:
             branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
@@ -275,7 +307,7 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/00_bootstrap_schemas.py
-              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","APP_NAME":"${var.app_name}","GENIE_CONSUMER_GROUP":"${var.genie_consumer_group}"}'
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","DATABRICKS_WAREHOUSE_ID":"${var.sql_warehouse_id}","APP_NAME":"${var.app_name}","GENIE_CONSUMER_GROUP":"${var.genie_consumer_group}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---

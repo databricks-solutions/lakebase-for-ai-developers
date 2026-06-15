@@ -26,8 +26,10 @@ You should be a **workspace admin** on the target workspace. Then:
 3. **A UC catalog you can write to** — set `uc_catalog`. (New catalogs can be blocked by Default
    Storage; reuse an existing one like `main` or a sandbox catalog if so.)
 4. **Node 18+** locally (the SPA build) and `uv` (already used by the repo).
-5. *(optional, for tracing)* a **SQL warehouse** — set `sql_warehouse_id` to enable MLflow UC
-   tracing. Leave blank to skip.
+5. *(tracing — automatic)* the bundle **creates a small serverless SQL warehouse** for MLflow UC
+   tracing and binds it to the app (the App SP is auto-granted `CAN USE`). To reuse an existing or
+   governed warehouse instead, pass `--var sql_warehouse_id=<id>`. Needs the deployer to be able to
+   create a SQL warehouse (workspace admin) — see the BYO note in DEPLOYMENT_GUIDE.md if not.
 
 Set non-default variables either inline (`--var uc_catalog=main`) or in a `*.tfvars`-style block;
 simplest is to edit the `default:`s in `databricks.yml` for your workspace once.
