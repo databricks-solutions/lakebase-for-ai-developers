@@ -121,7 +121,7 @@ variables:
   # DABs drops empty env values and Apps rejects the name-only entry); config treats "unset" as off.
   sql_warehouse_id:
     description: SQL warehouse id for MLflow UC tracing. Set a real id to enable traces; "unset" = tracing off.
-    default: "unset"
+    default: a7760b312858e85b
 
   log_level:
     description: App log level.
@@ -132,9 +132,14 @@ resources:
   # Fresh matters: MLflow's UC trace destination only binds to a trace-free experiment. The App
   # binds to it by id (env MLFLOW_EXPERIMENT_ID, value_from "experiment"), and the experiment
   # app-resource below grants the App's service principal CAN_MANAGE so it can write traces.
+  # Bumping the resource KEY (not just `name:`) is what forces DABs to provision a brand-new,
+  # trace-free experiment — MLflow's UC trace destination only binds to an experiment with no
+  # existing traces. Renaming via `name:` alone keeps the same experiment_id (DABs tracks by key),
+  # so it stays full of the old artifact-storage traces and the UC bind fails. Bump the key on the
+  # rare occasion you must re-home tracing onto UC; the old experiment is destroyed on deploy.
   experiments:
-    planner_experiment:
-      name: /Users/${workspace.current_user.userName}/${bundle.name}-${bundle.target}-traces
+    planner_experiment_uc:
+      name: /Users/${workspace.current_user.userName}/${bundle.name}-${bundle.target}-uc-traces
 
   apps:
     supply_chain_planner:
@@ -235,7 +240,7 @@ resources:
       resources:
         - name: 'experiment'
           experiment:
-            experiment_id: ${resources.experiments.planner_experiment.id}
+            experiment_id: ${resources.experiments.planner_experiment_uc.id}
             permission: 'CAN_MANAGE'
         - name: lakebase
           postgres:
