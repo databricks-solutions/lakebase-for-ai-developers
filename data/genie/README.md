@@ -1,26 +1,35 @@
 # data/genie/ — WS3 Analytics agent (Genie) plumbing
 
-Creates the operational schema and the Genie space programmatically. Chandhana (WS2) tunes
-the table contents + sample questions later; this scaffolds the substrate.
+Holds the canonical Genie-space config and the operational schema DDL. On deploy, the Genie space is
+a first-class DABs resource (`resources.genie_spaces` in `databricks.yml`) — created + bound to the
+app on `bundle deploy` from a serialized definition generated here. Chandhana (WS2) tunes the table
+contents + sample questions later; this scaffolds the substrate.
 
 ## Run order
 
 | # | Script | Where | What it does |
 |---|---|---|---|
 | 01 | `01_create_operational_schema.py` | **Databricks notebook / job** | Creates 5 empty Delta tables with comments — Genie reads the COMMENTs as metadata |
-| 02 | `02_create_genie_space.py` | **local** (`uv run python`) or notebook | Calls `w.genie.create_space(...)` with the serialized space from `genie_config.py`. Idempotent — finds existing by title. |
+| —  | `build_geniespace_json.py` | **deploy** (`uv run python`, run by `deploy.sh`) | Renders the serialized space from `genie_config.py` → `supply_chain.geniespace.json`, which the `genie_spaces` DABs resource ships via `file_path`. This is the deploy path. |
+| 02 | `02_create_genie_space.py` | **local only** (`uv run python`) | SDK `w.genie.create_space(...)` with the same serialized space. Idempotent — finds existing by title. For local experimentation without a bundle deploy. |
 
-After 02, paste the printed `space_id` into `.env` as `GENIE_SPACE_ID`.
+On deploy, DABs creates the space and the app reads its id from the resource binding — no manual
+`.env` / `GENIE_SPACE_ID` step. (Locally, `02` prints a `space_id` you can paste into `.env`.)
 
 ## Files
 
 - **`genie_config.py`** — canonical config for the space (tables, description, sample
-  questions, instructions, certified example SQLs). **Edit this, not the UI.** Re-running
-  `02_create_genie_space.py` updates the live space to match.
+  questions, instructions, certified example SQLs). **Edit this, not the UI.** Both the deploy path
+  (`build_geniespace_json.py`) and the local path (`02_create_genie_space.py`) render from it.
+- **`build_geniespace_json.py`** — renders `genie_config.py` → `supply_chain.geniespace.json` (the
+  artifact the `genie_spaces` DABs resource ships via `file_path`). The JSON is **committed** so
+  `bundle validate`/`plan`/`deploy` work from a clean checkout; `deploy.sh` regenerates it before
+  `bundle deploy` so it tracks `genie_config.py` edits and any `--var uc_catalog/uc_schema` override
+  (a custom catalog shows up as a local diff — don't commit it unless you mean to move the default).
 - **`01_create_operational_schema.py`** — empty DDL. WS2 (Chandhana) replaces the contents
   via dbldatagen / Faker; schema stays put as the contract.
-- **`02_create_genie_space.py`** — REST call via `databricks-sdk >= 0.106.0`. Falls back to
-  printing the config block if the SDK doesn't have the method.
+- **`02_create_genie_space.py`** — local-only SDK creator (`databricks-sdk >= 0.106.0`), for spinning
+  up / refreshing a space without a bundle deploy. Not part of the deploy flow.
 
 ## Parameters (all in `.env`)
 
@@ -28,7 +37,7 @@ After 02, paste the printed `space_id` into `.env` as `GENIE_SPACE_ID`.
 |---|---|---|
 | `UC_CATALOG` / `UC_SCHEMA` | `supply_chain` / `planner` | Target UC schema for the tables |
 | `DATABRICKS_WAREHOUSE_ID` | unset → auto-detect | Genie needs a warehouse to execute SQL |
-| `GENIE_SPACE_ID` | (output of 02) | Used by the agent's Genie tool at runtime |
+| `GENIE_SPACE_ID` | injected on deploy from the `genie_spaces` resource | Used by the agent's Genie tool at runtime; set locally only to point a LOCAL app at a specific space |
 
 ## Tables created (all empty until WS2)
 

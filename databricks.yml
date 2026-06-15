@@ -18,17 +18,29 @@
 #
 # DATA TOGGLE: start on the bundled demo samples (run the seed job). Later, point `uc_catalog` /
 # `uc_schema` at your own governed tables and DON'T run the seed job — the app reads whatever the
-# variables point at. Genie space is a carve-out (not a clean DABs resource): the seed job creates
-# one and prints its id; set `genie_space_id` and redeploy to wire the Analytics agent.
+# variables point at. The Genie (Analytics) space is now a first-class DABs resource
+# (resources.genie_spaces below) — created + bound to the app on `bundle deploy`, no seed-then-patch.
 
 bundle:
   name: supply_chain_planner
+  # Genie spaces are a first-class DABs resource (resources.genie_spaces) only under the DIRECT
+  # deployment engine, added in Databricks CLI 1.3.0 (direct is the default since 1.3.0). Pin both so
+  # a too-old CLI fails fast at `bundle validate` instead of silently dropping the resource. Migrating
+  # an existing Terraform-engine deploy: `databricks bundle deployment migrate -t <target>` adopts
+  # resources in place — verify `bundle plan` shows no destructive actions first. See docs/DEPLOY.md.
+  databricks_cli_version: ">= 1.3.0"
+  engine: direct
 
 # The built SPA lives in frontend/dist (git-ignored). Force-include it so `bundle deploy` ships it
 # to the App even though .gitignore would otherwise exclude it. Build it first (the Makefile does).
 sync:
   include:
     - frontend/dist/**
+  exclude:
+    # Local-only input for the genie_spaces resource (file_path). `bundle deploy` reads it from disk
+    # to build the space; it must NOT be synced into the app's source snapshot — the Workspace import
+    # rejects the .geniespace.json node type ("node type UNKNOWN"), which fails `bundle run` on the app.
+    - data/genie/supply_chain.geniespace.json
 
 variables:
   # --- App ---
@@ -44,7 +56,7 @@ variables:
     default: serverless_stable_yau46e_catalog
   uc_schema:
     description: Schema (within uc_catalog) for the operational Delta tables + Knowledge corpus.
-    default: supply_chain_planner
+    default: planner
 
   # --- Lakebase autoscaling (the agent's durable state + operational hybrid query). ---
   # Assumed to already exist (see docs/DEPLOY.md). The App mints OAuth DB creds from these coords.
@@ -68,24 +80,21 @@ variables:
   # so a plain writable catalog works and the bundle creates the `public` schema in it. One catalog
   # var to set (uc_catalog); LAKEBASE_UC_CATALOG below follows it.
 
-  # --- Analytics (Genie) — carve-out: created by the seed job, then set here + redeploy. ---
-  genie_space_id:
-    # Feeds the `genie-space` app resource (resources.apps...resources below); the app's
-    # GENIE_SPACE_ID env reads it back via `value_from: "genie-space"` (NOT a direct ${var}), so a
-    # real id is required — the resource can't be created from a sentinel. Set the id the seed job
-    # prints, then redeploy. (from-scratch bootstrap — space has no id until the seed runs — is a
-    # known follow-up; see the deploy.sh genie_wire_up patch.)
-    description: Genie space id — feeds the genie-space app resource; set the id the seed job prints.
-    default: "01f16128125d1d11897c8267c4e27be2"
+  # --- Analytics (Genie) — created + bound declaratively via resources.genie_spaces below. ---
+  # No genie_space_id var: DABs creates the space (from data/genie/supply_chain.geniespace.json) and
+  # the app reads its id back via ${resources.genie_spaces.supply_chain_analytics.space_id} — no
+  # hardcoded id, no capture-and-patch step. BYO an existing space with `databricks bundle generate
+  # genie-space --existing-id <id>` (emits the resource YAML + .geniespace.json to commit).
   genie_space_name:
-    description: Genie space display name (the genie-space app-resource label; matches the seed's title).
+    description: Genie space display name (resource title + the genie-space app-resource label).
     default: "Supply-Chain Planner — Analytics"
   genie_consumer_group:
-    # Optional: a workspace group the seed grants CAN_RUN on the Genie space, so end users can query
-    # it via OBO without a per-user share. "unset" (the default) skips the grant — share it in the UI
-    # later, or pass deploy.sh --genie-consumer-group <name>. Needs CAN MANAGE on the space (deployer).
-    description: Group granted CAN_RUN on the Genie space at seed time (OBO consumers). "unset" = skip.
-    default: "unset"
+    # Workspace group granted CAN_RUN on the space (OBO consumers) via the genie_spaces.permissions
+    # block below. Defaults to `users` (a real, always-present group, like the canonical DABs example)
+    # so the declarative grant is always valid. Scope tighter with --var genie_consumer_group=<group>
+    # (or deploy.sh --genie-consumer-group <group>). The app SP also gets CAN_RUN via the app binding.
+    description: Workspace group granted CAN_RUN on the Genie space (OBO consumers). Default `users`.
+    default: "users"
 
   # --- Knowledge (Mosaic AI Vector Search). ---
   vector_search_endpoint:
@@ -162,6 +171,25 @@ resources:
   experiments:
     planner_experiment_uc:
       name: /Users/${workspace.current_user.userName}/${bundle.name}-${bundle.target}-uc-traces
+
+  # Bundle-created Genie space (Analytics agent). DABs creates it from the serialized definition in
+  # data/genie/supply_chain.geniespace.json — generated from data/genie/genie_config.py (the single
+  # source of truth) by scripts/deploy.sh before `bundle deploy`, so the baked-in fully-qualified
+  # table identifiers match the target's uc_catalog/uc_schema. The app binds it by id (the genie-space
+  # app resource below, value_from "genie-space"); the permissions grant lets OBO consumers query it.
+  # Requires the DIRECT engine + CLI >= 1.3.0 (see the bundle: block above).
+  genie_spaces:
+    supply_chain_analytics:
+      title: ${var.genie_space_name}
+      description: "Aggregation + reporting over governed supply-chain tables for the Planner Copilot. Use for unfulfilled-demand rollups, supplier-risk summaries, and on-hand vs open-PO comparisons."
+      warehouse_id: ${var.sql_warehouse_id}
+      # Opaque JSON — DABs does NOT substitute ${var...} inside it, so the fully-qualified table
+      # identifiers (uc_catalog.uc_schema.<table>) are baked in at generation time. Regenerate with
+      # `uv run python data/genie/build_geniespace_json.py` (deploy.sh runs this before bundle deploy).
+      file_path: ./data/genie/supply_chain.geniespace.json
+      permissions:
+        - level: CAN_RUN
+          group_name: ${var.genie_consumer_group}
 
   apps:
     supply_chain_planner:
@@ -279,14 +307,18 @@ resources:
             branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
             database: projects/${var.lakebase_project}/branches/${var.lakebase_branch}/databases/${var.lakebase_database_resource}
             permission: CAN_CONNECT_AND_CREATE
-        # Genie (Analytics agent). Binding the resource does two things: grants the App SP CAN_RUN on
-        # the space (for the non-OBO/eval fallback) AND exposes the space_id to the app env via
-        # `value_from: "genie-space"` above. End-user queries run OBO (scope dashboards.genie), so the
-        # user — not the SP — is what UC governs at query time.
+        # Genie (Analytics agent). Binds the bundle-created space (resources.genie_spaces above) by id,
+        # so DABs creates the space first, then wires its id here in the same deploy. Binding does two
+        # things: grants the App SP CAN_RUN on the space (the non-OBO/eval fallback) AND exposes the
+        # space_id to the app env via `value_from: "genie-space"` above. End-user queries run OBO
+        # (scope dashboards.genie), so the user — not the SP — is what UC governs at query time.
         - name: genie-space
           genie_space:
+            # The genie_spaces resource exposes its created id as `.id` (NOT `.space_id`) in CLI
+            # 1.3.0 — same as experiments/jobs/sql_warehouses. The direct engine creates the space
+            # first, then resolves this id into the app's GENIE_SPACE_ID env in the same deploy.
             name: ${var.genie_space_name}
-            space_id: ${var.genie_space_id}
+            space_id: ${resources.genie_spaces.supply_chain_analytics.id}
             permission: CAN_RUN
 
   # Setup-and-seed job — loads the demo dataset. Run it for demo samples; skip it to bring your
@@ -307,7 +339,7 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/00_bootstrap_schemas.py
-              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","DATABRICKS_WAREHOUSE_ID":"${var.sql_warehouse_id}","APP_NAME":"${var.app_name}","GENIE_CONSUMER_GROUP":"${var.genie_consumer_group}"}'
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","DATABRICKS_WAREHOUSE_ID":"${var.sql_warehouse_id}","APP_NAME":"${var.app_name}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---
@@ -367,16 +399,9 @@ resources:
               - data/operational/05_grant_app_sp.py
               - *seed_cfg
           environment_key: seed
-        # Genie space only needs the operational Delta tables — decoupled from the Lakebase
-        # sub-chain so a Lakebase issue doesn't block it.
-        - task_key: create_genie_space
-          depends_on: [{ task_key: generate_operational_data }]
-          spark_python_task:
-            python_file: ./data/_seed_task.py
-            parameters:
-              - data/genie/02_create_genie_space.py
-              - *seed_cfg
-          environment_key: seed
+        # NOTE: the Genie space is no longer created here — it's a first-class DABs resource
+        # (resources.genie_spaces.supply_chain_analytics), created + bound to the app on `bundle
+        # deploy`. The operational tables it queries are still produced by generate_operational_data.
 
         # --- Knowledge chain → Vector Search (independent of the Lakebase chain) ---
         - task_key: upload_pdfs

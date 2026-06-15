@@ -1,7 +1,7 @@
 # Deploy for the Supply-Chain Planner Copilot. All deploy logic lives in scripts/deploy.sh
 # (idempotent, cold-start-safe, graceful degradation) — these targets are thin wrappers.
 #
-#   make deploy      PROFILE=<p>                       # full one-shot: build, deploy, seed, Genie, verify
+#   make deploy      PROFILE=<p>                       # full one-shot: build, deploy, seed, verify
 #   make deploy      PROFILE=<p> SEED=false            # bring your own data (skip the seed job)
 #   make deploy      PROFILE=<p> TARGET=demo           # clean prod-style names (default: dev)
 #   make deploy      PROFILE=<p> GENIE_GROUP=<group>   # grant a workspace group CAN_RUN on the Genie space (OBO)
@@ -10,9 +10,10 @@
 #   make build / validate / seed / destroy
 #
 # Prereqs (one-time, see docs/DEPLOY.md): a CLI profile pointed at your workspace, a writable UC
-# catalog, Node 18+ for the SPA build, and the Databricks CLI >= 0.295 (the `postgres` app resource
-# + autoscaling Lakebase project APIs need it). The Lakebase project, seed, and Genie wiring are all
-# handled automatically by scripts/deploy.sh — no manual prereq steps.
+# catalog, Node 18+ for the SPA build, and the Databricks CLI >= 1.3.0 (resources.genie_spaces + the
+# direct deployment engine; also covers the `postgres` app resource + autoscaling Lakebase APIs). The
+# Lakebase project, Genie space, and seed are all handled automatically by scripts/deploy.sh — no
+# manual prereq steps. (Existing Terraform-engine deploys: migrate once — see docs/DEPLOY.md.)
 #
 # Optional bundle-variable overrides (no need to edit databricks.yml per workspace), e.g.:
 #   make deploy PROFILE=<p> VARS="uc_catalog=my_catalog lakebase_project=my-proj"
@@ -35,11 +36,12 @@ _require_profile:
 	  echo "ERROR: set PROFILE=<cli-profile> (or export DATABRICKS_CONFIG_PROFILE)"; exit 1; fi
 
 # Full one-shot deploy. scripts/deploy.sh runs the cold-start preflight, ensures the Lakebase
-# project, builds the SPA, deploys + starts the app, seeds, auto-wires Genie, and verifies.
+# project, builds the SPA + Genie-space JSON, deploys + starts the app (creating the Genie space),
+# seeds, and verifies.
 deploy: _require_profile
 	./scripts/deploy.sh --profile $(PROFILE) --target $(TARGET) $(SEED_FLAG) $(GENIE_FLAG) $(VAR_FLAGS)
 
-# FAST dev loops — push code + restart the app ONLY (no seed/Genie/lakebase steps). Stays on the
+# FAST dev loops — push code + restart the app ONLY (no seed/lakebase steps). Stays on the
 # same target/app and never deletes it, so the SP and its Lakebase schemas persist. Safe all day.
 #   redeploy    → agent-server (Python) change: bundle deploy + bundle run     (~30-60s)
 #   redeploy-ui → frontend change: npm build + bundle deploy + bundle run

@@ -84,7 +84,7 @@ Databricks** (notebook/job, ambient session) — same code either way.
 | 2 | `uv run python data/operational/01_generate_genie_tables.py` | Populates the 5 Genie tables + `inventory_current`/`open_pos`. Prints **hero on-hand = 40.0**, **PO FK orphans = 0**. |
 | 3 | `uv run python data/operational/02_pre_seed_pgvector.py` | Creates the native `quality_incidents` pgvector table, embeds descriptions, builds the HNSW index. Smoke print: top-5 for the hero query are Henkel/SKU-1001 cracking rows. |
 | 4 | `uv run python data/operational/03_sync_to_lakebase.py` | Creates 6 Synced Tables; **then grant the App SP `SELECT`** (it prints the GRANTs). Watch `databricks postgres get-synced-table …` until each is `SUCCEEDED`. |
-| 5 | `uv run python data/genie/02_create_genie_space.py` | Creates the Genie space → paste the printed `GENIE_SPACE_ID` into `.env`. |
+| 5 | `uv run python data/genie/build_geniespace_json.py` | Generates `supply_chain.geniespace.json` (the `genie_spaces` DABs resource ships it on deploy). Local SDK alternative: `02_create_genie_space.py` → paste the printed `GENIE_SPACE_ID` into `.env`. |
 
 > Step 1 is mainly there to establish the column-comment contract; `operational/01` overwrites the
 > same tables. **Reseeding after step 3:** a full overwrite is non-incremental, so re-running step 2

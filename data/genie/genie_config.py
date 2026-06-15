@@ -1,19 +1,23 @@
 """Canonical Genie space config — single source of truth for the Analytics agent's space.
 
 Shared by:
-- `02_create_genie_space.py` (creates/updates the space via `w.genie.create_space`)
+- `build_geniespace_json.py` (renders the serialized space → data/genie/supply_chain.geniespace.json,
+  which the `resources.genie_spaces` DABs resource deploys)
+- `02_create_genie_space.py` (local-only: create/update the space via `w.genie.create_space`)
 - WS2/WS4 when they tune sample questions and instructions
 
-Edit this file (not the UI) so changes survive teardown + rebuild. Once the space is created,
-its `space_id` goes into `.env` as `GENIE_SPACE_ID`.
+Edit this file (not the UI) so changes survive teardown + rebuild. On deploy, DABs creates the space
+from the generated JSON and the app reads its id back from the genie_spaces resource — no manual
+`.env` / `GENIE_SPACE_ID` step.
 
-The serialized-space JSON shape follows version 2 of the Genie payload schema (the format
-`w.genie.create_space(serialized_space=...)` consumes). Reference pattern:
+The serialized-space JSON shape follows version 2 of the Genie payload schema (the format both
+`w.genie.create_space(serialized_space=...)` and the genie_spaces `file_path` consume). Reference:
 https://github.com/databricks-solutions/devrel-examples/blob/main/demos/bee-pollinator/scripts/setup_agents.py
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -21,8 +25,12 @@ from dataclasses import dataclass, field
 from agent_server.config import settings
 
 
-def _genie_id() -> str:
-    return uuid.uuid4().hex
+def _genie_id(content: str = "") -> str:
+    # Deterministic id derived from content, so build_serialized_space() is byte-stable across runs:
+    # the generated .geniespace.json doesn't churn → DABs sees no diff → idempotent redeploys (no
+    # spurious PATCH of the space on every deploy). Falls back to a random id only when no content is
+    # given (no caller does today; kept so the helper is safe to reuse).
+    return hashlib.md5(content.encode("utf-8")).hexdigest() if content else uuid.uuid4().hex
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,7 @@ class GenieSpaceConfig:
             "version": 2,
             "config": {
                 "sample_questions": sorted(
-                    [{"id": _genie_id(), "question": [q]} for q in self.sample_questions],
+                    [{"id": _genie_id(q), "question": [q]} for q in self.sample_questions],
                     key=lambda x: x["id"],
                 ),
             },
@@ -80,12 +88,14 @@ class GenieSpaceConfig:
             },
             "instructions": {
                 "text_instructions": (
-                    [{"id": _genie_id(), "content": [self.instructions]}] if self.instructions else []
+                    [{"id": _genie_id(self.instructions), "content": [self.instructions]}]
+                    if self.instructions
+                    else []
                 ),
                 "example_question_sqls": sorted(
                     [
                         {
-                            "id": _genie_id(),
+                            "id": _genie_id(ex.question + ex.sql),
                             "question": [ex.question],
                             "sql": [ex.sql.format(prefix=prefix)],
                         }

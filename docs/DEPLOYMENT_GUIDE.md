@@ -31,9 +31,9 @@ which the bundle ships via `sync.include`.
 ## 2. Prerequisites
 
 ### Tooling (your laptop)
-- [ ] **Databricks CLI** ≥ 0.295 (`databricks -v`) — `deploy.sh` enforces this in preflight. The
-      native `postgres` app resource needs it (0.294 first recognized the key; older CLIs treat it as
-      an unknown field and the deploy fails)
+- [ ] **Databricks CLI** ≥ 1.3.0 (`databricks -v`) — `deploy.sh` enforces this in preflight. Required
+      for the `resources.genie_spaces` resource + the **direct** deployment engine (GA + default since
+      1.3.0); it also covers the native `postgres` app resource (added in 0.294). Older CLIs fail the deploy.
 - [ ] **Node.js 18+** and npm (builds the SPA)
 - [ ] **uv** (`pip install uv`) — used by the App runtime and local runs
 
@@ -105,14 +105,15 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 | `vector_search_endpoint` | `supply-chain-planner-vs` | VS endpoint name (created by the seed job) |
 | `embedding_endpoint` | `databricks-gte-large-en` | a Databricks embedding endpoint |
 | `llm_endpoint` | `databricks-claude-opus-4-8` | a Foundation Model endpoint |
-| `genie_space_id` | `unset` (sentinel) | leave as-is for the first deploy; set the real id **after** the seed creates the space (§5, post-deploy step). The app treats `unset` as no-Genie. |
+| `genie_consumer_group` | `users` | workspace group granted `CAN_RUN` on the bundle-created Genie space (OBO consumers). Scope tighter with `--var genie_consumer_group=<group>` or `GENIE_GROUP=<group>`. |
 | `sql_warehouse_id` | the **bundle-created** `app_sql_warehouse` (small serverless wh) | leave as-is — the bundle creates + binds the warehouse (App SP auto-granted `CAN USE`; trace-schema grants run in the seed). Pass `--var sql_warehouse_id=<id>` to BYO an existing/governed warehouse. |
 
 > Bundle variables that feed app env vars must **never default to an empty string** — DABs drops
-> empty values and the Apps API rejects the resulting name-only entry. That's why `genie_space_id`
-> uses the `unset` sentinel. `sql_warehouse_id` sidesteps it differently: it defaults to a
-> bundle-created warehouse resource and reaches the app through a `sql_warehouse` resource binding
-> (`value_from`), not a raw env value — so there's always a real id (and the App SP gets `CAN USE`).
+> empty values and the Apps API rejects the resulting name-only entry. The Genie and warehouse ids
+> sidestep this the same way: both reach the app through a **resource binding** (`value_from`), not a
+> raw env value. `GENIE_SPACE_ID` comes from the bundle-created `genie_spaces` resource and
+> `MLFLOW_TRACING_SQL_WAREHOUSE_ID` from the `sql_warehouse` binding — so there's always a real id
+> (and the App SP gets `CAN_RUN` / `CAN USE` respectively).
 
 ---
 
@@ -146,14 +147,13 @@ The App SP's Lakebase access is **fully automatic** — there is no manual grant
 
 That wrapper ([`scripts/deploy.sh`](../scripts/deploy.sh)) runs these phases — critical phases fail
 fast; seed/Genie/verify **degrade gracefully** so a partial failure still leaves a working core app:
-0. **Preflight** — CLI ≥ 0.295, authenticated profile, `uc_catalog` exists, `node`/`uv` present; prints the Genie+OBO manual-steps banner.
+0. **Preflight** — CLI ≥ 1.3.0, authenticated profile, `uc_catalog` exists, `node`/`uv` present; prints the Genie+OBO manual-steps banner.
 1. **Lakebase project** — `scripts/ensure_lakebase_project.py` ensures the autoscaling project (idempotent).
-2. **Build** — `npm --prefix frontend ci && run build` → `frontend/dist`.
-3. **`bundle deploy`** — uploads source + creates the app **object**, experiment, job.
+2. **Build** — `npm --prefix frontend ci && run build` → `frontend/dist`; then generate `data/genie/supply_chain.geniespace.json` from `genie_config.py`.
+3. **`bundle deploy`** — uploads source + creates the app **object**, experiment, job, **and the Genie space** (`resources.genie_spaces`, bound to the app).
 4. **`bundle run supply_chain_planner`** — **deploys the app** (creates the active deployment that makes it live; also when the `postgres` resource registers the SP's Postgres role).
 5. **`bundle run setup_and_seed`** — loads demo data + the `grant_app_sp` SELECT grant (unless `SEED=false`).
-6. **Genie wire-up** — creates/finds the space, captures its id, patches `genie_space_id` into `databricks.yml`, and redeploys. `GENIE_GROUP=<group>` also grants that group `CAN_RUN`.
-7. **Verify + report** — runs `scripts/verify_deploy.py`, waits for the app to be ACTIVE, prints the URL.
+6. **Verify + report** — runs `scripts/verify_deploy.py`, waits for the app to be ACTIVE, prints the URL.
 
 > **Why deploying the app is a separate step (4):** `bundle deploy` does *not* deploy an app — it
 > only creates the app object (the shell). The app stays "No source code / Unavailable" until
@@ -166,15 +166,16 @@ make redeploy    PROFILE=<p>   # agent-server code change → bundle deploy + bu
 make redeploy-ui PROFILE=<p>   # frontend change → npm build + deploy + run
 ```
 
-### Genie is auto-wired — but OBO has two manual, security-gated steps
+### Genie is created as code — but OBO has two manual, security-gated steps
 
-`deploy.sh` phase 6 handles the Genie space end-to-end (create/find → capture id → patch
-`databricks.yml` → redeploy), so you no longer hand-copy the id from the job output. Two things it
-**cannot** do for you (surfaced in the preflight banner):
+The Genie space is a first-class DABs resource (`resources.genie_spaces`), created + bound to the app
+in a single `bundle deploy` — no capture-the-id-and-redeploy. Two things the deploy **cannot** do for
+you (surfaced in the preflight banner):
 1. A **workspace admin** enables the **"Databricks Apps – On-Behalf-Of-User Authorization"** Public Preview.
 2. **Each end user accepts the OAuth consent** on first open (a stale browser session → 403
-   `invalid scope`; re-open in a fresh/incognito session). End users also need `CAN_RUN` on the space
-   (pass `GENIE_GROUP=<group>`), `CAN USE` on a serverless/pro warehouse, and `SELECT` on the underlying tables.
+   `invalid scope`; re-open in a fresh/incognito session). End users also need `CAN USE` on a
+   serverless/pro warehouse and `SELECT` on the underlying tables. (`CAN_RUN` on the space is granted
+   to `users` by default — `GENIE_GROUP=<group>` to scope tighter.)
 
 Until those are done the Analytics/Genie route degrades gracefully — every other route works.
 
@@ -303,7 +304,7 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | App can't **read the synced tables** / `permission denied for table inventory_current` (or other `public.*`) | The `grant_app_sp` seed task didn't run, or the SP lacks `SELECT` on `public`. The `postgres` resource grants CONNECT/CREATE but **not** SELECT on platform-owned synced tables — that's the `grant_app_sp` task's job (depends on `sync_to_lakebase`). Re-run `make seed` (check the `grant_app_sp` task succeeded in the job UI). |
 | App can't **create its schema** at startup / `permission denied for database` (memory or write-back schema) | The `postgres` app resource isn't attached, or `lakebase_database_resource` is wrong so the resource bound to the wrong database (no CREATE granted). Verify the internal resource name: `databricks api get /api/2.0/postgres/projects/<p>/branches/<b>/databases` (deterministic kebab-case of the db name, e.g. `databricks-postgres`), set `lakebase_database_resource` to match, and redeploy. |
 | Knowledge route errors "VECTOR_SEARCH_INDEX not set" | The `build_vs_index` seed task didn't finish, or `uc_catalog`/`uc_schema` mismatch. Re-run `make seed`. |
-| Analytics/Genie route says no space | `genie_space_id` still blank → set it from the `create_genie_space` task output + redeploy (§5, post-deploy step). |
+| Analytics/Genie route says no space | The `genie_spaces` resource didn't deploy (or `GENIE_SPACE_ID` env is empty). Confirm the CLI is ≥ 1.3.0 on the **direct** engine, `databricks bundle plan` shows the space + the app's `genie-space` binding resolved, then redeploy. |
 | Traces don't appear | UC trace bind failed at startup. Check app logs for `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` (seed's trace-schema grants didn't run → re-run `make seed`) or `UC tracing OFF: no SQL warehouse set` (a BYO `--var sql_warehouse_id` was empty/`unset`). The bundle default creates + binds the warehouse, so this is rare. |
 | Seed task seeds the wrong catalog | The task config is the JSON arg the bundle passes to `data/_seed_task.py` → `os.environ` → `agent_server.config`. Check the task's run parameters in the job UI match your `uc_catalog`. |
 | `sync_to_lakebase` fails: `Schema '<catalog>.public' does not exist` | `bootstrap_schemas` didn't run / a stale deploy — it creates `<uc_catalog>.public`. Re-run `make seed`. |
