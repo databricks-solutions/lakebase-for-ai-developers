@@ -26,10 +26,11 @@ You should be a **workspace admin** on the target workspace. Then:
 3. **A UC catalog you can write to** — set `uc_catalog`. (New catalogs can be blocked by Default
    Storage; reuse an existing one like `main` or a sandbox catalog if so.)
 4. **Node 18+** locally (the SPA build) and `uv` (already used by the repo).
-5. *(tracing — automatic)* the bundle **creates a small serverless SQL warehouse** for MLflow UC
-   tracing and binds it to the app (the App SP is auto-granted `CAN USE`). To reuse an existing or
-   governed warehouse instead, pass `--var sql_warehouse_id=<id>`. Needs the deployer to be able to
-   create a SQL warehouse (workspace admin) — see the BYO note in DEPLOYMENT_GUIDE.md if not.
+5. *(tracing — automatic)* on the `dev`/`demo` targets the bundle **creates a small serverless SQL
+   warehouse** for MLflow UC tracing + the Genie space and binds it to the app (the App SP is
+   auto-granted `CAN USE`). This needs the deployer to be able to create a SQL warehouse. **If you
+   can't** (restricted workspace), use the `byo` target, which omits that resource — see *Bring your
+   own warehouse* below.
 
 Set non-default variables either inline (`--var uc_catalog=main`) or in a `*.tfvars`-style block;
 simplest is to edit the `default:`s in `databricks.yml` for your workspace once.
@@ -43,13 +44,46 @@ make deploy PROFILE=<p> TARGET=demo     # clean prod-style resource names (defau
 make deploy PROFILE=<p> GENIE_GROUP=<g> # also grant a workspace group CAN_RUN on the Genie space (OBO)
 ```
 
+Point the catalog/schema/warehouse at your workspace inline (no `databricks.yml` edit needed) — these
+are the variables you'll most often override:
+
+```bash
+make deploy PROFILE=<p> VARS="uc_catalog=main uc_schema=planner"
+# or, calling deploy.sh directly, the same three have first-class flags:
+./scripts/deploy.sh -p <p> --uc-catalog main --uc-schema planner --sql-warehouse-id <id>
+```
+
+### Bring your own warehouse (restricted workspaces)
+
+The `dev`/`demo` targets create their own serverless warehouse. If the deployer **lacks
+warehouse-create entitlement**, that step 403s. Use the **`byo` target**, which omits the warehouse
+resource — you must supply an existing warehouse id (the deployer needs `CAN USE` on it):
+
+```bash
+make deploy PROFILE=<p> TARGET=byo VARS="sql_warehouse_id=<existing-id>"
+# or:  ./scripts/deploy.sh -p <p> -t byo --sql-warehouse-id <existing-id>
+```
+
+The Genie space, trace storage, and seed SQL all run against that warehouse; the App SP still gets
+`CAN USE` via the app's `trace-warehouse` binding. Everything else (cold-start table DDL, Genie,
+seed) is identical to `dev`. deploy.sh fails fast if you select `byo` without a warehouse id.
+
 `make deploy` is a thin wrapper over [`scripts/deploy.sh`](../scripts/deploy.sh) — one idempotent,
 cold-start-safe engine. Phases: **0** cold-start preflight (CLI ≥ 1.3.0, auth, catalog exists,
 node/uv) → **1** ensure the Lakebase project → **2** build the SPA + generate the Genie-space JSON →
-**3** `bundle deploy` (creates the Genie space as a `genie_spaces` resource + binds it to the app) →
-**4** `bundle run` (the active deployment — `bundle deploy` only makes the shell) → **5** seed → **6**
-verify + print the app URL. Critical phases fail fast; seed/verify **degrade gracefully** so a partial
+**3** create the operational schema + **empty** tables (so the next phase passes) → **4** `bundle
+deploy` (creates the Genie space as a `genie_spaces` resource + binds it to the app) → **5** `bundle
+run` (the active deployment — `bundle deploy` only makes the shell) → **6** seed → **7** verify +
+print the app URL. Critical phases fail fast; seed/verify **degrade gracefully** so a partial
 failure still leaves a working core app.
+
+> **Why phase 3 (create empty tables) exists.** The `genie_spaces` resource's create-API
+> **validates that its referenced tables exist** at `bundle deploy` time — but the seed (phase 6),
+> which fills them, runs *after*. On a fresh catalog that ordering would 403 (`schema '…' does not
+> exist`). So deploy.sh creates the 5 operational tables **empty** up front (reusing the idempotent
+> `data/genie/01_create_operational_schema.py` via Databricks Connect — no warehouse needed), then
+> the seed populates them. This is what keeps the one-shot cold-start working on a brand-new
+> catalog/schema. (Skipped on `make redeploy`/`--app-only` — the tables already exist by then.)
 
 > **Already deployed this app on the older Terraform engine?** The bundle now uses the **direct**
 > deployment engine (required for `genie_spaces`; GA + default since CLI 1.3.0). Migrate the live

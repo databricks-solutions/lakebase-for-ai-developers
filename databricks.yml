@@ -120,44 +120,25 @@ variables:
   mlflow_trace_prefix:
     description: Table-name prefix for the UC trace tables.
     default: scp
-  # SQL warehouse that backs UC trace storage (and the seed's Genie/knowledge SQL). Defaults to the
-  # bundle-created `app_sql_warehouse` resource below — no hardcoded id, and the app binds it so the
-  # App SP auto-gets CAN_USE. BYO: pass --var sql_warehouse_id=<existing id> to use a governed/existing
-  # warehouse instead. (A deployer who cannot create warehouses at all is the documented byo/Tier-2
-  # case — not handled here; this always creates its own, which auto-stops at ~zero idle cost.)
+  # SQL warehouse backing UC trace storage, the seed's Genie/knowledge SQL, AND the Genie space's
+  # warehouse_id. NO top-level default — it's declared PER-TARGET: dev/demo set it to their
+  # bundle-created `app_sql_warehouse` (see targets below); the `byo` target omits that resource, so
+  # you MUST pass an existing id there (deploy.sh --sql-warehouse-id <id>, or --var sql_warehouse_id=<id>).
+  # Bound into the app via the `trace-warehouse` resource (auto-grants the App SP CAN_USE + injects the id).
   sql_warehouse_id:
-    description: Warehouse for MLflow UC tracing + seed SQL. Defaults to the bundle-created serverless warehouse; override with an existing warehouse id to BYO.
-    default: ${resources.sql_warehouses.app_sql_warehouse.id}
+    description: Warehouse id for MLflow UC tracing, seed SQL, and the Genie space. Set per-target (dev/demo) to the bundle-created warehouse; required (no default) for the `byo` target.
 
   log_level:
     description: App log level.
     default: INFO
 
 resources:
-  # Bundle-created SQL warehouse backing MLflow UC trace storage (and, via &seed_cfg, the seed's
-  # Genie-space + knowledge SQL). Small + serverless + short auto-stop → ~zero idle cost. The app
-  # binds it (app `resources` below) so the App SP auto-gets CAN_USE and the id is injected into the
-  # env via value_from — no hardcoded warehouse id. `var.sql_warehouse_id` defaults to this; pass
-  # --var sql_warehouse_id=<existing id> to BYO a governed/existing warehouse instead.
-  sql_warehouses:
-    app_sql_warehouse:
-      name: ${bundle.name}-${bundle.target}-wh
-      cluster_size: "2X-Small"          # smallest; trace writes are tiny (the old shared wh was Small)
-      enable_serverless_compute: true   # serverless + PRO, like the prior "Serverless Starter Warehouse"
-      warehouse_type: PRO
-      auto_stop_mins: 10
-      min_num_clusters: 1
-      max_num_clusters: 1
-      tags:
-        custom_tags:
-          - key: app
-            value: ${bundle.name}
-          - key: target
-            value: ${bundle.target}
-          - key: purpose
-            value: mlflow-uc-tracing
-          - key: managed-by
-            value: dabs
+  # NOTE: the SQL warehouse that backs MLflow UC trace storage (and, via &seed_cfg, the seed's
+  # Genie-space + knowledge SQL, and the Genie space's warehouse_id) is declared PER-TARGET, not
+  # here — see targets.dev / targets.demo below. This lets the `byo` target omit it for workspaces
+  # where the deployer can't create warehouses (DABs has no "remove resource", so the warehouse is
+  # declared only in the targets that should create it). `var.sql_warehouse_id` is set per-target to
+  # the created warehouse's id (dev/demo) or must be provided (byo).
 
   # Bundle-managed MLflow experiment — DABs creates a FRESH one per deploy, owned by the deployer.
   # Fresh matters: MLflow's UC trace destination only binds to a trace-free experiment. The App
@@ -296,8 +277,8 @@ resources:
             permission: 'CAN_MANAGE'
         # SQL warehouse backing UC trace storage. Binding it grants the App SP CAN_USE on the
         # warehouse AND injects its id into the env (MLFLOW_TRACING_SQL_WAREHOUSE_ID, value_from
-        # "trace-warehouse"). id = ${var.sql_warehouse_id}, which defaults to the bundle-created
-        # `app_sql_warehouse` above (or a BYO id via --var).
+        # "trace-warehouse"). id = ${var.sql_warehouse_id} — set per-target to the bundle-created
+        # `app_sql_warehouse` (dev/demo) or to a BYO id you pass on the `byo` target.
         - name: trace-warehouse
           sql_warehouse:
             id: ${var.sql_warehouse_id}
@@ -451,16 +432,53 @@ resources:
 targets:
   # Personal iteration on YOUR workspace. mode:development prefixes resource names with your user.
   # Host comes from the --profile you pass (portable — no workspace hardcoded here).
+  # The bundle-created warehouse is declared HERE (per-target, not top-level) so the `byo` target can
+  # omit it; `var.sql_warehouse_id` is set to its id. Small + serverless + short auto-stop → ~zero
+  # idle cost. demo aliases the same block; byo declares neither (BYO an existing warehouse id).
   dev:
     mode: development
     default: true
+    variables:
+      sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
+    resources:
+      sql_warehouses:
+        app_sql_warehouse: &app_sql_warehouse
+          name: ${bundle.name}-${bundle.target}-wh
+          cluster_size: "2X-Small"          # smallest; trace writes are tiny (the old shared wh was Small)
+          enable_serverless_compute: true   # serverless + PRO, like the prior "Serverless Starter Warehouse"
+          warehouse_type: PRO
+          auto_stop_mins: 10
+          min_num_clusters: 1
+          max_num_clusters: 1
+          tags:
+            custom_tags:
+              - key: app
+                value: ${bundle.name}
+              - key: target
+                value: ${bundle.target}
+              - key: purpose
+                value: mlflow-uc-tracing
+              - key: managed-by
+                value: dabs
 
   # Clean shared/demo deploy — fixed resource names, no user prefix.
   demo:
     mode: production
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
     resources:
+      sql_warehouses:
+        app_sql_warehouse: *app_sql_warehouse
       apps:
         supply_chain_planner:
           name: supply-chain-planner
+
+  # Restricted workspaces where the deployer CANNOT create a SQL warehouse (no warehouse-create
+  # entitlement). Omits the `app_sql_warehouse` resource entirely, so you MUST pass an existing
+  # warehouse id: `deploy.sh --sql-warehouse-id <id>` (or --var sql_warehouse_id=<id>). The Genie
+  # space + trace binding reference that id; the App SP still gets CAN_USE via the trace-warehouse
+  # app binding. mode:development → user-prefixed names, collision-safe on shared workspaces.
+  byo:
+    mode: development

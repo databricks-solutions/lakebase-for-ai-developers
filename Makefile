@@ -17,6 +17,10 @@
 #
 # Optional bundle-variable overrides (no need to edit databricks.yml per workspace), e.g.:
 #   make deploy PROFILE=<p> VARS="uc_catalog=my_catalog lakebase_project=my-proj"
+#
+# Restricted workspace (deployer can't create a SQL warehouse)? Use the `byo` target, which omits the
+# bundle-created warehouse and uses an existing one (you need CAN USE on it):
+#   make deploy PROFILE=<p> TARGET=byo VARS="sql_warehouse_id=<existing-id>"
 
 TARGET ?= dev
 SEED   ?= true
@@ -66,4 +70,13 @@ seed: _require_profile
 destroy: _require_profile
 	databricks bundle destroy -t $(TARGET) --profile $(PROFILE)
 
-.PHONY: _require_profile deploy redeploy redeploy-ui build validate seed destroy
+# Cold-start E2E test: deploy to a THROWAWAY Lakebase project + UC schema in an isolated git worktree,
+# verify, then tear it all down (always safe — see scripts/integration_test.sh / the integration-test
+# skill). Needs CATALOG=<existing-writable-catalog>; pass extra flags via ITEST_ARGS, e.g.
+#   make integration-test PROFILE=<p> CATALOG=main
+#   make integration-test PROFILE=<p> CATALOG=main ITEST_ARGS="--target byo --sql-warehouse-id <id>"
+integration-test: _require_profile
+	@if [ -z "$(CATALOG)" ]; then echo "ERROR: set CATALOG=<existing-writable-catalog>"; exit 1; fi
+	./scripts/integration_test.sh --profile $(PROFILE) --uc-catalog $(CATALOG) $(ITEST_ARGS)
+
+.PHONY: _require_profile deploy redeploy redeploy-ui build validate seed destroy integration-test

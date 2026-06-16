@@ -87,6 +87,7 @@ freely; they have no pinned SHA.
 | Skill | What it covers |
 |-------|----------------|
 | `sync-architecture-docs` | Keep `docs/architecture.md` (the 4 Mermaid diagrams) + the READMEs/`CLAUDE.md` in sync with the code; reconcile the known stale-doc patterns; verify with greps + Mermaid validity. Run after topology/tool/schema/auth/frontend changes. |
+| `integration-test` | Drive the cold-start E2E deploy test (`scripts/integration_test.sh`): deploy to a throwaway Lakebase project + UC schema in an isolated git worktree, verify, and tear down safely. Use before a PR that touches `deploy.sh` / `databricks.yml` / the seed. |
 
 ---
 

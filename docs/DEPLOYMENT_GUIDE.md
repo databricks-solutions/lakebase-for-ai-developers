@@ -106,7 +106,7 @@ that differ from the defaults — simplest is to edit the `default:`s once, or p
 | `embedding_endpoint` | `databricks-gte-large-en` | a Databricks embedding endpoint |
 | `llm_endpoint` | `databricks-claude-opus-4-8` | a Foundation Model endpoint |
 | `genie_consumer_group` | `users` | workspace group granted `CAN_RUN` on the bundle-created Genie space (OBO consumers). Scope tighter with `--var genie_consumer_group=<group>` or `GENIE_GROUP=<group>`. |
-| `sql_warehouse_id` | the **bundle-created** `app_sql_warehouse` (small serverless wh) | leave as-is — the bundle creates + binds the warehouse (App SP auto-granted `CAN USE`; trace-schema grants run in the seed). Pass `--var sql_warehouse_id=<id>` to BYO an existing/governed warehouse. |
+| `sql_warehouse_id` | the **bundle-created** `app_sql_warehouse` (small serverless wh) on `dev`/`demo`; **no default** on `byo` | leave as-is on `dev`/`demo` — the bundle creates + binds the warehouse (App SP auto-granted `CAN USE`; trace-schema grants run in the seed). To **BYO** a governed/existing warehouse *without* creating one, deploy `TARGET=byo` (omits the resource) and pass `--var sql_warehouse_id=<id>` (or `--sql-warehouse-id <id>`). Overriding the var on `dev`/`demo` still *creates* the unused warehouse, so prefer `byo`. |
 
 > Bundle variables that feed app env vars must **never default to an empty string** — DABs drops
 > empty values and the Apps API rejects the resulting name-only entry. The Genie and warehouse ids
@@ -224,10 +224,11 @@ Genie, the VS index, or the user's UC tables — only the user does.
       (which auto-registers the App SP's Postgres role). Workspace admins have this.
 - [ ] **Vector Search** — create an endpoint + index — VS entitlement + `CREATE` on `<uc_catalog>.<uc_schema>`
 - [ ] **Genie** — create a Genie space — Genie entitlement + `CAN MANAGE` on a SQL warehouse
-- [ ] **SQL warehouse** — the bundle **creates** one (`app_sql_warehouse`) for tracing + the seed's
-      Genie/VS SQL, so the deployer needs the entitlement to **create a serverless SQL warehouse**
-      (workspace admins have it). BYO instead with `--var sql_warehouse_id=<id>` (then you just need
-      `CAN USE` on that one); a deployer who can create neither is the byo/Tier-2 case.
+- [ ] **SQL warehouse** — on `dev`/`demo` the bundle **creates** one (`app_sql_warehouse`) for
+      tracing + the seed's Genie/VS SQL, so the deployer needs the entitlement to **create a
+      serverless SQL warehouse** (workspace admins have it). **Can't create one?** Deploy the **`byo`
+      target** (`make deploy TARGET=byo VARS="sql_warehouse_id=<id>"`) — it omits the warehouse
+      resource and uses your existing warehouse (you just need `CAN USE` on it).
 
 ### B. The App service principal (auto-created on first deploy)
 Resolve its id: `databricks apps get supply-chain-planner -p <p> -o json` → `service_principal_client_id`.
