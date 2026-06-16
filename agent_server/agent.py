@@ -6,9 +6,10 @@ translates graph state into the OpenAI Responses stream the chat UI / API expect
 streaming token chunks.
 
 Run/poll/resume transport + the Lakebase lifespan are provided by `LongRunningAgentServer`
-(see `start_server.py`). HITL: a fresh question starts a run; the run pauses at the planner's
-`interrupt()` (Slice 3 — the P0 stub auto-approves for now); the client resumes by re-invoking
-with the same `thread_id` and an HITL verdict in `custom_inputs`, which becomes `Command(resume=...)`.
+(see `start_server.py`). HITL: a fresh question starts a run; the run pauses at the review node's
+`interrupt()`, durably on the Lakebase checkpoint, until a human approves/rejects; the client
+resumes by re-invoking with the same `thread_id` and an HITL verdict in `custom_inputs`, which
+becomes `Command(resume=...)`.
 
 MLflow autolog is enabled at import so the whole run is one trace.
 """
@@ -295,7 +296,7 @@ async def stream_handler(
     graph_input: Any = resume if resume is not None else {
         "question": question,
         "user_id": user_id or "unknown",
-        # WS1 short-term memory: record the user turn so the planner's history block (and the
+        # Short-term memory: record the user turn so the planner's history block (and the
         # next turn on this thread) sees it. Not added on resume — that continues an existing turn.
         "messages": [HumanMessage(content=question)],
     }
@@ -354,7 +355,7 @@ async def invoke_handler(request: ResponsesAgentRequest) -> ResponsesAgentRespon
     graph_input: Any = resume if resume is not None else {
         "question": question,
         "user_id": user_id or "unknown",
-        # WS1 short-term memory: record the user turn so the planner's history block (and the
+        # Short-term memory: record the user turn so the planner's history block (and the
         # next turn on this thread) sees it. Not added on resume — that continues an existing turn.
         "messages": [HumanMessage(content=question)],
     }

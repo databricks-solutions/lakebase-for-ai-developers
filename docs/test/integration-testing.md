@@ -224,4 +224,4 @@ psycopg/CLI steps (3–5) and the Tier 2 verify locally.
 | Embedding count mismatch (step 2) | Embedding endpoint unreachable or returned partial — check the endpoint name in `.env` |
 
 See [`data/operational/README.md`](../../data/operational/README.md) for the data design and the
-production access-control options, and [`../sprint-plan.md`](../sprint-plan.md) for tiering vs the P0/P1/P2 scope.
+production access-control options.

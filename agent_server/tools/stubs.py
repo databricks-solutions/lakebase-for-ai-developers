@@ -1,4 +1,4 @@
-"""In-memory fakes for every gather agent. Lets WS1/WS5 build the router graph offline
+"""In-memory fakes for every gather agent. Let the router graph build and run offline
 without a workspace, a VS index, or a Genie space.
 
 Each fake matches the shape of the real impl in contracts.py — so swapping `query_*_impl`
@@ -74,7 +74,7 @@ def ask_genie_fake(question: str, conversation_id: str | None = None) -> GenieRe
 def query_operational_fake(question: str) -> OperationalResult:
     return OperationalResult(
         question=question,
-        sql="-- STUB: hybrid similarity + join (WS2)",
+        sql="-- STUB: hybrid similarity + join",
         rows=[
             OperationalRow(
                 sku="SKU-1001",

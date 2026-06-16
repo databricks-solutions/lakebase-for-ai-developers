@@ -38,7 +38,7 @@ from agent_server.graph.planner import (
 from agent_server.operational_db import build_writeback_rows
 
 THREAD = "thread-meridian"
-USER = "alex.miller@databricks.com"
+USER = "demo-user@databricks.com"
 
 
 # ── Shared fixtures (plain helpers, no pytest fixtures to match test_memory.py) ──────────────

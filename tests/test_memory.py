@@ -35,7 +35,7 @@ from agent_server.memory import (
 )
 
 THREAD = "thread-xyz"
-USER = "alex.miller@databricks.com"
+USER = "demo-user@databricks.com"
 
 
 def _rec(action_bearing: bool = True) -> PlannerRecommendation:

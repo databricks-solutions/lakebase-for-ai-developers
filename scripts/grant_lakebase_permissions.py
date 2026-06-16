@@ -18,8 +18,8 @@ Usage:
     uv run python scripts/grant_lakebase_permissions.py <principal> [--schema S] [--mode read|langgraph]
 
 Examples:
-    # Let me read the SP-owned prod memory schema for debugging:
-    uv run python scripts/grant_lakebase_permissions.py alex.miller@databricks.com \
+    # Let a user read the SP-owned prod memory schema for debugging:
+    uv run python scripts/grant_lakebase_permissions.py <your-user>@databricks.com \
         --schema supply_chain_planner_memory --mode read
 
     # Give the App SP full access to a memory schema (client id from `databricks apps get`):

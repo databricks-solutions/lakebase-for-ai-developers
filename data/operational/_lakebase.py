@@ -1,7 +1,7 @@
 """Lakebase connection + embedding helpers for the operational data-gen scripts.
 
-Scoped to `data/operational/` for now (the pre-seed + verify scripts). WS1 may later consolidate
-connection handling into the agent runtime (the `databricks-langchain` `AsyncLakebasePool` already
+Scoped to `data/operational/` for now (the pre-seed + verify scripts). Connection handling may
+later be consolidated into the agent runtime (the `databricks-langchain` `AsyncLakebasePool` already
 does this for the checkpointer/store); this helper covers the one-off psycopg path that data-gen
 needs. Follows the `databricks-lakebase` skill's connectivity patterns.
 

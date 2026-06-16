@@ -57,7 +57,7 @@ from agent_server.memory import (
 
 # In-scope demo identity → the real operational query returns the hero rows (Henkel SUP-001/
 # SKU-1001). Memory namespaces key on this id, but live only in the throwaway schema below.
-DEFAULT_USER = os.environ.get("VALIDATION_USER", "alex.miller@databricks.com")
+DEFAULT_USER = os.environ.get("VALIDATION_USER", "demo-user@databricks.com")
 DEFAULT_MEMORY_SCHEMA = os.environ.get("VALIDATION_MEMORY_SCHEMA", "scp_mem_validation")
 
 
@@ -66,7 +66,7 @@ async def _drive(graph, store, thread_id: str, question: str, user_id: str,
                  resume_verdict: str | None, resume_note: str | None):
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "store": store}}
     interrupt_payload = None
-    # Mirror agent.py: record the user turn for WS1 short-term history (add_messages appends).
+    # Mirror agent.py: record the user turn for short-term history (add_messages appends).
     turn_input = {"question": question, "user_id": user_id,
                   "messages": [HumanMessage(content=question)]}
     async for chunk in graph.astream(turn_input, config, stream_mode="updates"):
@@ -282,7 +282,7 @@ async def _run_all(user: str, memory_schema: str, no_clean: bool):
                                            if r4["state"].get("recommendation") else None),
                         "trace_notes": r4["state"].get("trace_notes", [])}
 
-        # ── 4: SAME-thread follow-up → short-term conversational memory (WS1) ────────────────────
+        # ── 4: SAME-thread follow-up → short-term conversational memory ──────────────────────────
         print("\n[4] same-thread follow-up → expect turn-2 planner to see turn-1 (history threaded)")
         tid = uuid.uuid4().hex
         await _turn(graph, store, "4-turn1", tid, Q_ACTION, user_id=user, resume_verdict="approved")
@@ -382,7 +382,7 @@ def write_memory_report(path: Path, meta: dict, results: dict, checks: list[dict
                  f"| {_fmt(ts.get('total_ms'),'ms')} | {tok_s} | `{(r.get('trace_id') or '')[:12] or '—'}` |")
     L.append("")
 
-    L.append("## Short-term (WS1)\n")
+    L.append("## Short-term\n")
     s4 = results.get("4", {})
     L.append(f"- same-thread turn-2 messages: **{s4.get('messages_count')}** · "
              f"planner saw history: **{s4.get('planner_used_history')}**")
@@ -416,7 +416,7 @@ def run_memory_validation(drop: bool = False, no_clean: bool = False,
         print(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['name']}  {c['detail']}")
 
     s4 = results.get("4", {})
-    print("\n=== MULTI-TURN (short-term, WS1) ===")
+    print("\n=== MULTI-TURN (short-term) ===")
     print(f"  same-thread turn-2 messages_count={s4.get('messages_count')} "
           f"planner_saw_history={s4.get('planner_used_history')}")
 

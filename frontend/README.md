@@ -1,4 +1,4 @@
-# frontend/ — Supply-Chain Planner Copilot UI (WS1 + WS4)
+# frontend/ — Supply-Chain Planner Copilot UI
 
 A one-page, **Claude-style** chat interface to the LangGraph agent, in the Databricks **V0**
 design language (ported from `strategic_revenue_demo`'s `databricks-horizontal-demo-app-arch`
@@ -68,8 +68,6 @@ card treatment follow the `databricks-horizontal-demo-app-arch` skill.
 
 ## Known TODOs
 
-- **HITL approve/reject** buttons are placeholders — wiring resume + streaming the approval card
-  is follow-up #2 (`custom_outputs` on the `/responses` path).
 - **Transcript rehydration**: reopening a past conversation resumes context server-side but the
   visible message list is per-browser-session; a `/api/sessions/{id}/messages` endpoint that
   reads the checkpoint would render full history across reloads.

@@ -5,8 +5,8 @@ pre-seeded `quality_incidents` (pgvector) + JOINs to live on-hand inventory and 
 the project thesis — similarity as one predicate inside a relational/operational query, not a
 vector-index round-trip + app-side join.
 
-The SQL mirrors `data/operational/04_verify_hybrid_query.py` (the WS2 spike that validates the
-hero scenario) and is always returned on `OperationalResult.sql` for traceability/scoring.
+The SQL mirrors `data/operational/04_verify_hybrid_query.py` (the reference query that validates
+the hero scenario) and is always returned on `OperationalResult.sql` for traceability/scoring.
 
 Access control: operational reads run as the app service principal, so every authenticated app
 user sees the same UC-governed data. Fine-grained per-user product-code scoping is intentionally

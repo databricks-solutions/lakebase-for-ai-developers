@@ -1,4 +1,4 @@
-# data/ — WS2 (Operational data) + WS4 (demo dataset)
+# data/ — operational data + demo dataset
 
 > **Scaffold placeholder.** No data-gen code yet. This is the home for synthetic data
 > generation, the operational tables, the hybrid similarity+join query, and the seeded **Apex
@@ -29,8 +29,5 @@
 
 ## Skills & references
 Vendored `lakebase-setup`, `agent-memory`, `create-tools`, `add-tools`; plus `databricks-lakebase`.
-See [`../docs/references.md`](../docs/references.md).
-
-## Risk note
-WS2 **spikes the hybrid query first** (Day 1). If it's slow/fails by the Day-2 trigger, fall
-back to a single-query join with app-side access scoping. See [`../docs/sprint-plan.md`](../docs/sprint-plan.md).
+See [`../docs/references.md`](../docs/references.md). The hybrid similarity + join query and its
+app-side access scoping are described in [`../docs/architecture.md`](../docs/architecture.md).

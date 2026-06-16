@@ -2,7 +2,8 @@
 
 > Shared context for every engineer's Claude Code sessions. Read this first so sessions stay
 > aligned on the use case, stack, environment, and architecture. The shared state schema and
-> I/O contracts are a Phase-0 task — agree any interface in a PR until they land.
+> I/O contracts live in [`agent_server/contracts.py`](agent_server/contracts.py) — build against
+> them; changing one is a team decision.
 
 ## Project & goal
 
@@ -187,45 +188,45 @@ make redeploy-ui PROFILE=<p>              # FAST: frontend change → npm build 
   `CAN MANAGE` first** (the platform reassigns the SP's objects and drops the role cleanly). See
   [`docs/lakebase-apps-permissions.md`](docs/lakebase-apps-permissions.md).
 
-## Repo layout & workstreams
+## Repo layout
 
-| Path | Workstream / owner | Holds |
-|------|--------------------|-------|
-| `agent_server/` | **WS1** Spine, App & DABs (Alex & Kylie) + **WS5** LangGraph/Routing (Ram) | Graph skeleton, supervisor routing, checkpointer+store wiring, MLflow autolog, App run/poll/resume handlers |
-| `data/` | **WS2** Operational (Chandhana) + **WS4** demo data | Synthetic data gen, operational tables, the hybrid similarity+join query; seeded demo scenario |
-| `agent_server/` (Genie tool) | **WS3** Genie + (stretch) Vector Search (Ram/Kylie) | Genie space wrapper; VS Knowledge agent |
-| `agent_server/` (planner/HITL) | **WS4** Planner + HITL + demo | Planner node, gate/threshold, `interrupt()` approval card, run-of-show |
-| `databricks.yml` | **WS1** | DABs bundle: App resource, Lakebase, experiment, setup/seed job, `dev`/`demo` targets |
-| `docs/` | all | Architecture, storyboard, sprint plan, references |
-| `.env.example` | all | Local config template (`cp` → `.env`) — see auth section above |
-| `.claude/skills/` | all | Vendored, pinned build + Databricks + MLflow skills |
+| Path | Area | Holds |
+|------|------|-------|
+| `agent_server/` | Spine, App, DABs & routing | Graph skeleton, supervisor routing, checkpointer+store wiring, MLflow autolog, App run/poll/resume handlers |
+| `data/` | Operational & demo data | Synthetic data gen, operational tables, the hybrid similarity+join query; seeded demo scenario |
+| `agent_server/` (Genie tool) | Genie & Vector Search | Genie space wrapper; VS Knowledge agent |
+| `agent_server/` (planner/HITL) | Planner & HITL | Planner node, gate/threshold, `interrupt()` approval card, run-of-show |
+| `databricks.yml` | Deploy / DABs | DABs bundle: App resource, Lakebase, Genie space, experiment, setup/seed job, `dev`/`demo` targets |
+| `docs/` | Docs | Architecture, storyboard, references |
+| `.env.example` | Config | Local config template (`cp` → `.env`) — see auth section above |
+| `.claude/skills/` | Skills | Vendored, pinned build + Databricks + MLflow skills |
 
-## Scope tiers (build P0 first, iterate)
+## Capability tiers (core loop first, then enhancements)
 
-- **P0 — core loop:** supervisor + routing · Operational agent (hybrid similarity + join to
-  on-hand/POs) · Genie Analytics agent · **sequential** planner + gate · short-term checkpointer ·
+- **Core loop:** supervisor + routing · Operational agent (hybrid similarity + join to
+  on-hand/POs) · Genie Analytics agent · planner + gate · short-term checkpointer ·
   HITL approve/reject via `interrupt()` · MLflow autolog · Databricks App (run/poll/resume) ·
   seeded demo dataset · OBO auth · DABs deploy (`dev`/`demo`).
-- **P1:** long-term store (cross-session memory) · Knowledge agent (Vector Search) +
-  side-by-side comparison.
-- **P2:** parallel gather + planner fan-out (`Send`) · HITL **edit + replan** · MLflow evaluation.
+- **Memory & retrieval:** long-term store (cross-session memory) · Knowledge agent (Vector Search) +
+  side-by-side comparison · MLflow evaluation flywheel.
+- **Advanced:** parallel gather + planner fan-out (`Send`) · HITL **edit + replan**.
 
 ## Conventions & do/don'ts
 
-- **Build against contracts.** Once the state schema + I/O contracts land (Phase 0), respect
-  them; changing one is a team decision. Until then, agree interfaces in the PR.
-- **One stub/mock per agent** so workstreams build/test in isolation.
+- **Build against contracts.** The state schema + I/O contracts are defined in
+  [`agent_server/contracts.py`](agent_server/contracts.py); respect them — changing one is a team decision.
+- **One stub/mock per agent** so each agent builds/tests in isolation.
 - **Small, contract-respecting PRs.**
 - **Keep `interrupt()` out of parallel steps.**
 - **Auth:** on-behalf-of-user (OBO) / OAuth for Knowledge (Vector Search) + Genie (scope
   `dashboards.genie` — **not** the newer `genie`, which Apps don't support yet); the Operational
   agent + Lakebase use the app service principal. The Operational agent returns its generated SQL
   so the join is traceable and scorable.
-- **Genie carve-out:** the Genie space is auto-created by the seed job and wired via the
-  `genie_space_id` bundle var (`deploy.sh` captures the id and redeploys) — it is **not** a DABs
-  resource. Two OBO steps the deploy *cannot* automate (security-gated): a workspace admin must
-  enable the **Apps – On-Behalf-Of-User Authorization** Public Preview, and **each user accepts the
-  OAuth consent on first open**. Until then the Analytics route degrades gracefully; every other route works.
+- **Genie space:** a first-class DABs resource (`resources.genie_spaces` in `databricks.yml`),
+  created from `data/genie/supply_chain.geniespace.json` and bound to the app on `bundle deploy` —
+  no seed-then-patch. Two OBO steps the deploy *cannot* automate (security-gated): a workspace admin
+  must enable the **Apps – On-Behalf-Of-User Authorization** Public Preview, and **each user accepts
+  the OAuth consent on first open**. Until then the Analytics route degrades gracefully; every other route works.
 
 ## Skills
 
@@ -244,7 +245,7 @@ Pull the non-vendored skills with `scripts/install-skills.sh`.
 
 Links (template, skills, accelerator, docs): [`docs/references.md`](docs/references.md).
 Architecture detail: [`docs/architecture.md`](docs/architecture.md). Storyboard & persona:
-[`docs/storyboard.md`](docs/storyboard.md). Sprint plan: [`docs/sprint-plan.md`](docs/sprint-plan.md).
+[`docs/storyboard.md`](docs/storyboard.md).
 
 **Primary reference template (lean on it heavily):**
 [`databricks/app-templates/agent-langgraph-advanced`](https://github.com/databricks/app-templates/tree/main/agent-langgraph-advanced).
