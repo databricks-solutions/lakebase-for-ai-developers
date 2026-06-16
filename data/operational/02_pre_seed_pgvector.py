@@ -26,7 +26,7 @@ if REPO_ROOT not in sys.path:
 
 from agent_server.config import settings
 from data.operational import seeds
-from data.operational._lakebase import connect, embed, vector_literal
+from data.operational._lakebase import connect, embed, ensure_vector_ready, vector_literal
 
 SCHEMA = settings.lakebase_operational_schema
 TABLE = f"{SCHEMA}.quality_incidents"
@@ -42,7 +42,10 @@ def main() -> None:
     print(f"  got {len(vectors)} vectors, {dims} dims")
 
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        # Create the pgvector extension if needed AND put its schema on the search_path — on a fresh
+        # deploy the app's memory store has already created it in the MEMORY schema, so `vector(...)`
+        # below won't resolve from `public` otherwise. See ensure_vector_ready.
+        ensure_vector_ready(cur, create=True)
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
         # Recreate for idempotency (demo table we fully own).
         cur.execute(f"DROP TABLE IF EXISTS {TABLE}")

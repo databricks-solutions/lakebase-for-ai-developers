@@ -23,12 +23,19 @@ from langchain_core.tools import tool
 
 from agent_server.config import settings
 from agent_server.contracts import OperationalResult, OperationalRow
-from agent_server.operational_db import embed_query, operational_pool, vector_literal
+from agent_server.operational_db import (
+    embed_query,
+    ensure_vector_search_path,
+    operational_pool,
+    vector_literal,
+)
 
 _SCHEMA = settings.lakebase_operational_schema
 
-# Hybrid similarity + relational query. Schema-qualified so it resolves regardless of the
-# connection search_path. Keep in sync with data/operational/04_verify_hybrid_query.py.
+# Hybrid similarity + relational query. TABLES are schema-qualified so they resolve regardless of
+# search_path; the `vector` type + `<=>` operator are NOT (they live wherever pgvector was installed),
+# so the caller runs ensure_vector_search_path() first. Keep in sync with
+# data/operational/04_verify_hybrid_query.py.
 HYBRID_SQL = f"""
 SELECT m.incident_id, m.summary, m.supplier_id, m.sku, m.category,
        i.on_hand_qty, po.open_po_qty,
@@ -52,6 +59,7 @@ def query_operational_impl(question: str) -> OperationalResult:
 
     rows: list[OperationalRow] = []
     with operational_pool().connection() as conn, conn.cursor() as cur:
+        ensure_vector_search_path(cur)  # resolve `vector`/`<=>` wherever pgvector landed (memory schema on a fresh deploy)
         cur.execute(HYBRID_SQL, {"q": qvec})
         cols = [c.name for c in cur.description]
         for record in cur.fetchall():

@@ -64,6 +64,24 @@ def vector_literal(vec: list[float]) -> str:
     return "[" + ",".join(repr(float(x)) for x in vec) + "]"
 
 
+def ensure_vector_search_path(cur) -> None:
+    """Prepend the schema where the pgvector `vector` extension lives to the session search_path so
+    the hybrid query's `::vector` cast + `<=>` operator resolve. On a fresh deploy the agent-memory
+    store creates the extension in the MEMORY schema (not `public`), so the operational pool's
+    public-only search_path can't see it (→ `type "vector" does not exist`). Mirrors
+    data/operational/_lakebase.ensure_vector_ready (the app can't import the data/ package).
+    Best-effort: if pgvector isn't found yet, leave the search_path untouched.
+    """
+    cur.execute("SELECT extnamespace::regnamespace::text AS schema FROM pg_extension WHERE extname = 'vector'")
+    row = cur.fetchone()
+    if not row:
+        return
+    ext_schema = row["schema"] if isinstance(row, Mapping) else row[0]
+    op_schema = settings.lakebase_operational_schema
+    if ext_schema and ext_schema != op_schema:
+        cur.execute(f"SET search_path TO {op_schema}, {ext_schema}, public")
+
+
 def embed_query(text: str) -> list[float]:
     """Embed one query string via the Databricks embedding serving endpoint."""
     resp = _ws().serving_endpoints.query(name=settings.embedding_endpoint, input=[text])

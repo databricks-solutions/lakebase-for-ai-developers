@@ -121,6 +121,29 @@ def connect() -> psycopg.Connection:
     return psycopg.connect(**params)
 
 
+def ensure_vector_ready(cur, *, create: bool = False) -> None:
+    """Make the pgvector `vector` type + operators resolvable for operational-schema queries.
+
+    The `vector` extension is database-global but its objects (the `vector` type, the `<=>`
+    operator, `vector_cosine_ops`) live in exactly ONE schema. The agent-memory store
+    (`AsyncDatabricksStore.setup`) runs `CREATE EXTENSION vector` in the MEMORY schema at app
+    startup — which, on a fresh deploy, happens BEFORE the operational seed — so `vector` lands in
+    the memory schema, not `public`. The operational session's search_path (`"$user", public`) then
+    can't resolve unqualified `vector(...)` / `::vector` / `<=>`, and you get `type "vector" does not
+    exist`. (On an already-seeded workspace it worked only because the extension already sat in
+    `public`.) Discover where the extension actually lives and prepend it to the session search_path.
+    `create=True` (seed only) installs the extension first if nothing has yet.
+    """
+    if create:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    cur.execute("SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'vector'")
+    row = cur.fetchone()
+    op_schema = settings.lakebase_operational_schema
+    ext_schema = row[0] if row else op_schema
+    # operational schema first (its tables resolve unqualified too), then wherever pgvector lives.
+    cur.execute(f"SET search_path TO {op_schema}, {ext_schema}, public")
+
+
 def vector_literal(vec: list[float]) -> str:
     """pgvector text form '[1,2,3]' for casting `::vector`. Shared by 02 (seed insert) and 04
     (query vector) so the literal format can't drift between the write and read paths."""

@@ -23,7 +23,7 @@ if REPO_ROOT not in sys.path:
 
 from agent_server.config import settings
 from data.operational import seeds
-from data.operational._lakebase import connect, embed, vector_literal
+from data.operational._lakebase import connect, embed, ensure_vector_ready, vector_literal
 
 SCHEMA = settings.lakebase_operational_schema
 
@@ -51,6 +51,7 @@ def main() -> None:
     failures: list[str] = []
 
     with connect() as conn, conn.cursor() as cur:
+        ensure_vector_ready(cur)  # resolve `vector`/`<=>` wherever the extension landed (memory schema on a fresh deploy)
         rows = _run(cur, qvec)
         print(f"\n=== Hero adhesive-cracking query — {len(rows)} rows ===")
         for r in rows:
