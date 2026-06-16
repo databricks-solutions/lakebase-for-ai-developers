@@ -96,9 +96,8 @@ All code, demo, and doc links for the Supply-Chain Planner Copilot. Curated from
 - Product Routing (positioning Databricks Vector vs Lakebase) — Confluence:
   https://databricks.atlassian.net/wiki/spaces/~7120200d4c393f21a14d67bba42ffb3e92a69f/pages/5892374578/Product+Routing
 - `#apa-lakebase` Slack channel — combining pgvector with AI Search (open thread).
-- Lakebase Level Up code references — *link TBD from team*.
 
-## Open questions tracked
-See [`../CLAUDE.md`](../CLAUDE.md#open-questions-need-resolution): Lakebase RLS, UC governance
-scope over Postgres tables, pgvector freshness (embed-on-write vs Synced Tables), IVFFlat vs
-HNSW, long-term memory scope.
+## Design considerations
+Discussed in [`architecture.md`](architecture.md): Lakebase RLS / per-user scoping, UC governance
+scope over Postgres tables, pgvector freshness (embed-on-write vs Synced Tables), IVFFlat vs HNSW,
+and long-term memory scope.

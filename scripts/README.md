@@ -1,22 +1,22 @@
-# scripts/ — setup, seed, and tooling
+# scripts/ — setup, seed, deploy, and tooling
 
-> **Scaffold placeholder.** Bring over the template's `scripts/` (`quickstart.py`,
-> `start_app.py`, `discover_tools.py`, `preflight.py`, `grant_lakebase_permissions.py`) when
-> WS1 stands up the spine:
-> https://github.com/databricks/app-templates/tree/main/agent-langgraph-advanced/scripts
+Operational scripts for deploying and validating the app. The one-shot deploy
+(`make deploy`) is a thin wrapper over `deploy.sh`; see [`../docs/DEPLOY.md`](../docs/DEPLOY.md).
 
-## Present now
-- `install-skills.sh` — pulls the **non-vendored** extras (other Databricks Agent Skills +
-  MLflow Skills) at pinned versions. The relevant skills are already vendored in
-  `.claude/skills/` (see `.claude/skills/UPSTREAM.md`).
+## Contents
+- **`deploy.sh`** — all deploy logic (idempotent, cold-start-safe, graceful per-step
+  degradation): preflight · Lakebase project · build · `bundle deploy` + `bundle run` · seed ·
+  Genie · verify. Invoked by the `Makefile` targets (`deploy`, `redeploy`, `redeploy-ui`).
+- **`ensure_lakebase_project.py`** — ensures the autoscaling Lakebase project/branch exists before deploy.
+- **`grant_lakebase_permissions.py`** — grants a user/SP the Postgres DB access the app needs
+  (the auto-grant covers CONNECT+CREATE; SELECT is granted explicitly).
+- **`verify_deploy.py`** — post-deploy smoke checks against the running app.
+- **`integration_test.sh`** + **`itest_teardown.py`** — cold-start end-to-end deploy test in an
+  isolated worktree with always-safe teardown (see [`../docs/test/integration-testing.md`](../docs/test/integration-testing.md)).
+- **`install-skills.sh`** — pulls the **non-vendored** extra skills at pinned versions; the core
+  skills are already vendored in `.claude/skills/` (see `.claude/skills/UPSTREAM.md`).
 
-## Environment
-The Phase-0 dependency contract is [`../pyproject.toml`](../pyproject.toml) (deps only — no
-entrypoints yet). Create the env with `uv sync`. When WS1 brings the template's `agent_server/`
-+ this `scripts/` dir, add the `[project.scripts]` entrypoints (`start-app`, `start-server`,
-`quickstart`, …) and reconcile with the template's `pyproject.toml`.
-
-## To add (WS1 / WS4)
-- `quickstart` — auth + profile + Lakebase config + MLflow experiment (`uv run quickstart`).
-- Setup/seed — create UC objects + seed the Acme dataset and pgvector tables/indexes; wired as
-  the DABs `setup_and_seed` job so `bundle deploy + seed` is the demo recovery path.
+## Environment & entrypoints
+Create the env with `uv sync` against [`../pyproject.toml`](../pyproject.toml). The app
+entrypoints are declared there under `[project.scripts]`: `start-server` (and its `start-app`
+alias) run the agent server; `agent-evaluate` runs the evaluation flywheel.

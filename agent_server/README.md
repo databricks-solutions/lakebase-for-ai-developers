@@ -1,4 +1,4 @@
-# agent_server/ — WS1 (Spine, App & DABs) + WS5 (LangGraph, Routing)
+# agent_server/ — spine, App, DABs & graph/routing
 
 The implemented Supply-Chain Planner Copilot: a LangGraph `StateGraph` (not a message-based
 ReAct agent) that routes a planner's question to the right data surfaces, composes a grounded

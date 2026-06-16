@@ -4,7 +4,7 @@ Shared by:
 - `build_geniespace_json.py` (renders the serialized space → data/genie/supply_chain.geniespace.json,
   which the `resources.genie_spaces` DABs resource deploys)
 - `02_create_genie_space.py` (local-only: create/update the space via `w.genie.create_space`)
-- WS2/WS4 when they tune sample questions and instructions
+- the data/demo layer when tuning sample questions and instructions
 
 Edit this file (not the UI) so changes survive teardown + rebuild. On deploy, DABs creates the space
 from the generated JSON and the app reads its id back from the genie_spaces resource — no manual
@@ -110,7 +110,7 @@ class GenieSpaceConfig:
 
 # Canonical config for the Supply-Chain Planner's Analytics agent.
 # Tables are placeholders — `01_create_operational_schema.py` creates them empty with the
-# schema below; WS2 (Chandhana) fills them with real synthetic data.
+# schema below; the data-gen step fills them with real synthetic data.
 SUPPLY_CHAIN_GENIE_SPACE = GenieSpaceConfig(
     display_name="Supply-Chain Planner — Analytics",
     description=(

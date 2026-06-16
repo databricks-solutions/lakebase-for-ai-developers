@@ -1,4 +1,4 @@
-# data/operational/ — WS2 operational dataset + the hybrid similarity-join query
+# data/operational/ — operational dataset + the hybrid similarity-join query
 
 Synthetic **structured** data for the Supply-Chain Planner Copilot, plus the operational-Lakebase
 layer that backs the canonical demo:

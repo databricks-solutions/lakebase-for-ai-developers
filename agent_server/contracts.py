@@ -1,7 +1,7 @@
 """Pydantic I/O contracts for every gather agent + planner + router.
 
-These are the Phase-0 contracts CLAUDE.md mandates. Change them only via team decision —
-they're the interface every workstream builds against in isolation. Stubs and real
+These are the shared I/O contracts CLAUDE.md mandates. Change them only via team decision —
+they're the interface every agent builds against in isolation. Stubs and real
 implementations must produce identical shapes so swapping in the real node is a no-op.
 """
 
@@ -68,7 +68,7 @@ class GenieResult(BaseModel):
     error: str | None = None
 
 
-# ── Operational agent (Lakebase hybrid query — WS2 owns the implementation) ───────────────
+# ── Operational agent (Lakebase hybrid query) ─────────────────────────────────────────────
 
 
 class OperationalRow(BaseModel):

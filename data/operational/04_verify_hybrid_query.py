@@ -1,6 +1,6 @@
 """04 — Verify the operational hybrid query against the seeded Lakebase data.
 
-This is WS2's "spike the hybrid query first" gate. It runs the resolved hybrid SQL (vector
+This validates the hybrid query end-to-end. It runs the resolved hybrid SQL (vector
 similarity + relational joins) and asserts the hero scenario reproduces deterministically for the
 adhesive-cracking query:
     • top result is the Henkel / SKU-1001 adhesive-cracking cluster

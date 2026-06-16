@@ -10,7 +10,7 @@ requires-python = ">=3.11,<3.13"
 
 # Environment contract. Deps mirror the reference template's pinned set
 # (https://github.com/databricks/app-templates/blob/main/agent-langgraph-advanced/pyproject.toml)
-# plus the data/pgvector deps WS2 needs for the spike.
+# plus the data/pgvector deps for the operational data layer.
 dependencies = [
     # --- App / server (from the template) ---
     "fastapi>=0.129.0",
@@ -25,14 +25,14 @@ dependencies = [
     "langgraph>=1.1.0",
     "langchain-mcp-adapters>=0.2.1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
-    # --- Lakebase / pgvector (WS2) ---
+    # --- Lakebase / pgvector ---
     "psycopg[binary,pool]>=3.2.0",
     "langgraph-checkpoint-postgres>=2.0.0",
     "pgvector>=0.3.0",
-    # --- Synthetic data gen (WS2/WS4) ---
+    # --- Synthetic data gen ---
     "dbldatagen>=0.4.0",
     "faker>=30.0.0",
-    # --- Knowledge agent: PDF parsing + chunking + VS client (WS3) ---
+    # --- Knowledge agent: PDF parsing + chunking + VS client ---
     "pypdf>=5.0.0",
     "langchain-community>=0.3.0",
     "langchain-text-splitters>=0.3.0",

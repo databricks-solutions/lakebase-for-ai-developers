@@ -99,7 +99,7 @@ class Settings(BaseModel):
         alias="SEED_DATA_PATH",
     )
 
-    # --- Lakebase (WS1 wires these later) ---
+    # --- Lakebase ---
     lakebase_instance_name: str | None = Field(default=None, alias="LAKEBASE_INSTANCE_NAME")
     lakebase_database: str = Field(
         default="databricks_postgres", alias="LAKEBASE_DATABASE"
@@ -118,7 +118,7 @@ class Settings(BaseModel):
     memory_similarity_threshold: float = Field(
         default=0.0, alias="MEMORY_SIMILARITY_THRESHOLD"
     )
-    # Short-term memory (WS1): how many prior conversation turns (messages) to feed the planner
+    # Short-term memory: how many prior conversation turns (messages) to feed the planner
     # as context. Trim-only for now — the full history is checkpointed per thread, but only the
     # last N are rendered into the planner prompt (older turns are dropped, not summarized yet).
     short_term_keep_recent: int = Field(default=6, alias="SHORT_TERM_KEEP_RECENT")

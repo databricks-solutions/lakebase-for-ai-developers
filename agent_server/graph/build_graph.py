@@ -10,8 +10,8 @@ Gather nodes write distinct state keys (no reducer). The fan-out uses
 together in the next superstep, and the planner naturally fans-in once they all complete.
 
 The checkpointer hookup is left as an optional argument so this module stays runnable
-without a Lakebase connection. WS1 wires `AsyncCheckpointSaver` in when stateful
-sessions land.
+without a Lakebase connection. `AsyncCheckpointSaver` is wired in when stateful
+sessions are enabled.
 """
 
 from __future__ import annotations

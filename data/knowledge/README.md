@@ -1,4 +1,4 @@
-# data/knowledge/ — WS3 Knowledge agent pipeline
+# data/knowledge/ — Knowledge agent pipeline
 
 PDFs → Delta chunks → Vector Search index, all parameterized by `.env`.
 

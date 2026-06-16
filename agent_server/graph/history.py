@@ -1,4 +1,4 @@
-"""Shared short-term conversation-history rendering (WS1).
+"""Shared short-term conversation-history rendering.
 
 The full message history is checkpointed per thread; these helpers render the recent PRIOR
 turns into compact text for prompt context. Both the planner (`planner_node`) and the

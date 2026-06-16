@@ -95,7 +95,7 @@ def analytics_node(state: AgentState) -> dict:
         return {"analytics_result": GenieResult(question=question, error=str(exc))}
 
 
-# ── Operational (Lakebase hybrid — STUB always; WS2 replaces) ────────────────────────
+# ── Operational (Lakebase hybrid — STUB always; real impl in operational_tool) ───────
 
 def operational_node(state: AgentState) -> dict:
     question = state["question"]

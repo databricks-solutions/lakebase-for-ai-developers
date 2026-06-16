@@ -83,7 +83,7 @@ id** and grants it `CONNECT` + `CREATE` on the database (permission label
 - Slack — **theo.fernandez (Apps eng)**, #apa-apps, 2025‑07‑07: *"Apps will only grant the postgres
   CONNECT and CREATE permissions to the service principal's role… If you want to grant additional
   permissions to the role"* you do it yourself.
-- Slack — **phil.sheffield (Lakebase)**, #apa-lakebase, 2026‑06‑02: *"Right, no Lakebase-specific
+- Slack — **Lakebase team**, #apa-lakebase, 2026‑06‑02: *"Right, no Lakebase-specific
   auto-grant."*
 
 **Confidence: High.** The "CONNECT + CREATE only" boundary is stated identically across docs + two
@@ -137,8 +137,8 @@ resources:
 
 **Caveat — one-bundle bootstrap not possible yet.** You **cannot** create the autoscaling project +
 database **and** bind it to the app in a single bundle: there's no declarative `postgres_databases`
-/ `postgres_synced_tables` resource in DABs yet (on the roadmap per the Lakebase IaC owner,
-anna.stepanyan, status through 2026‑06‑11). The `postgres` app resource binds to a **pre-existing**
+/ `postgres_synced_tables` resource in DABs yet (on the roadmap per the Databricks Lakebase team,
+status through 2026‑06‑11). The `postgres` app resource binds to a **pre-existing**
 project/branch/database — which we already require as a deploy prerequisite (DEPLOYMENT_GUIDE §3),
 so this doesn't block us.
 
@@ -157,7 +157,7 @@ synced-tables schema from a seed-job task. A **branch superuser must run the GRA
 grant itself SELECT on a schema it doesn't own. This is exactly the pattern the internal
 agent-platform team ships, and what `data/operational/05_grant_app_sp.py` does.
 
-- Slack — **bryan.qiu (agents eng)**, #apps-devex, 2026‑04: the agent-platform team uses *"a skill +
+- Slack — **agents eng**, #apps-devex, 2026‑04: the agent-platform team uses *"a skill +
   script to grant lakebase permissions to the SP"* (`app-templates/.claude/skills/lakebase-setup`,
   step 6 "Grant SP permissions").
 - Docs — *Create Postgres roles* (2026‑05‑20): the documented manual role-create is the **SQL
@@ -410,9 +410,9 @@ verified mid-2026. Confidence noted where a claim leans on a single or older sou
 **Slack (product/eng; High unless noted):**
 - #help-dabs 2026‑03‑29 (tushar.madan) — autoscaling ⇒ `postgres` key, CLI ≥0.294, `database` field = internal resource name.
 - #apa-apps 2025‑07‑07 (theo.fernandez, Apps eng) — "only CONNECT + CREATE." *(predates the autoscaling `postgres` split — cite for grant scope, not autoscaling support.)*
-- #apa-lakebase 2026‑06‑02 (phil.sheffield, Lakebase) — "no Lakebase-specific auto-grant."
-- #apps-devex 2026‑04 (bryan.qiu, agents eng) — agent-platform team's grant skill+script (matches our seed approach).
-- #apa-lakebase, status through 2026‑06‑11 (anna.stepanyan, Lakebase IaC owner) — `postgres_databases`/`postgres_synced_tables` on the DABs roadmap, not shipped; Terraform ahead of DABs.
+- #apa-lakebase 2026‑06‑02 (Lakebase team) — "no Lakebase-specific auto-grant."
+- #apps-devex 2026‑04 (agents eng) — agent-platform team's grant skill+script (matches our seed approach).
+- #apa-lakebase, status through 2026‑06‑11 (Lakebase IaC team) — `postgres_databases`/`postgres_synced_tables` on the DABs roadmap, not shipped; Terraform ahead of DABs.
 - #lakebase-integration-agent-memory 2026‑05/06 — `agent-langgraph-advanced` README "postgres resource not yet supported" is **stale** (fix ticketed).
 
 See also [`references.md`](references.md) → *Databricks docs → Lakebase* for the broader Lakebase

@@ -3,12 +3,12 @@
 # MAGIC # 01 — Create the Operational Schema (empty tables) for the Genie space
 # MAGIC
 # MAGIC Stands up empty Delta tables matching `genie_config.SUPPLY_CHAIN_GENIE_SPACE.tables` so
-# MAGIC the Genie space (`02_create_genie_space.py`) has something to bind to, even before WS2
-# MAGIC fills these with synthetic data. Column comments mirror the Genie table descriptions —
+# MAGIC the Genie space (`02_create_genie_space.py`) has something to bind to, even before the
+# MAGIC data-gen step fills these with synthetic data. Column comments mirror the Genie table descriptions —
 # MAGIC the Genie LLM uses them for NL→SQL grounding.
 # MAGIC
-# MAGIC Idempotent. Re-runs are a no-op (CREATE TABLE IF NOT EXISTS). Safe to run as Chandhana's
-# MAGIC WS2 work lands — she'll either ALTER TABLE or REPLACE TABLE to evolve the schema.
+# MAGIC Idempotent. Re-runs are a no-op (CREATE TABLE IF NOT EXISTS). Safe to run as the data-gen
+# MAGIC work lands — it'll either ALTER TABLE or REPLACE TABLE to evolve the schema.
 # MAGIC
 # MAGIC Runs both ways via `get_spark()` — the ambient session on Databricks (notebook/job), or
 # MAGIC Databricks Connect locally (`uv run python data/genie/01_create_operational_schema.py`).
@@ -114,4 +114,4 @@ for table in ("suppliers", "product_dim", "inventory", "purchase_orders", "suppl
     cnt = spark.table(fq).count()
     print(f"  {fq}: {cnt} rows")
 
-print("\nDone. WS2 (Chandhana) will populate these tables with synthetic data.")
+print("\nDone. The data-gen step populates these tables with synthetic data.")
