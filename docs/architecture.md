@@ -57,9 +57,10 @@ flowchart LR
 
 ### Diagram 2 — Data / seed pipeline
 
-The `setup_and_seed` DABs job: a `bootstrap_schemas` task, then three independent chains
-(operational → Lakebase, Genie, knowledge → Vector Search). Task keys and table/index names are
-verbatim from `databricks.yml`.
+The `setup_and_seed` DABs job: a `bootstrap_schemas` task, then two independent chains
+(operational → Lakebase, knowledge → Vector Search). Task keys and table/index names are verbatim
+from `databricks.yml`. (The Genie space is no longer seeded — it's a `resources.genie_spaces` DABs
+resource, created on `bundle deploy` over the operational tables this job populates.)
 
 ```mermaid
 flowchart TB
@@ -76,10 +77,6 @@ flowchart TB
     op4 --> op6
   end
 
-  subgraph Gen["Genie chain"]
-    g1["create_genie_space<br/>over the 5 Delta tables"]
-  end
-
   subgraph Kn["Knowledge chain to Vector Search"]
     k1["upload_pdfs to UC Volume documents"]
     k2["parse_and_chunk to Delta knowledge_chunks (CDF)"]
@@ -88,7 +85,6 @@ flowchart TB
   end
 
   boot --> op1
-  op2 --> g1
   boot --> k1
 ```
 

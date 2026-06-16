@@ -13,28 +13,37 @@
 #   make redeploy-ui PROFILE=<p>            # fast: frontend change → build + deploy + restart
 #
 # Options:
-#   --profile, -p <name>        Databricks CLI profile (or export DATABRICKS_CONFIG_PROFILE).
-#   --target,  -t <dev|demo>    DABs target (default: dev).
-#   --no-seed                   Skip the demo-data seed job (bring your own data).
-#   --no-verify                 Skip the post-deploy smoke check.
-#   --app-only                  Fast path: only build(opt) + bundle deploy + bundle run + report.
-#                               Skips preflight, lakebase project, seed, Genie. For code iteration.
-#   --build-frontend            Force the SPA build (default ON for full deploy, OFF for --app-only).
-#   --no-build-frontend         Skip the SPA build.
-#   --genie-consumer-group <g>  Workspace group to grant CAN_RUN on the Genie space (OBO consumers).
-#   --var k=v                   Extra bundle variable override (repeatable).
-#   -h, --help                  Show this help.
+#   --profile, -p <name>         Databricks CLI profile (or export DATABRICKS_CONFIG_PROFILE).
+#   --target,  -t <dev|demo|byo>  DABs target (default: dev). `byo` omits the bundle-created warehouse
+#                                for restricted workspaces — requires --sql-warehouse-id.
+#   --no-seed                    Skip the demo-data seed job (bring your own data).
+#   --no-verify                  Skip the post-deploy smoke check.
+#   --app-only                   Fast path: only build(opt) + bundle deploy + bundle run + report.
+#                                Skips preflight, lakebase project, pre-deploy table DDL, seed.
+#   --build-frontend             Force the SPA build (default ON for full deploy, OFF for --app-only).
+#   --no-build-frontend          Skip the SPA build.
+#   --uc-catalog <name>          UC catalog for operational tables + Genie + traces (var uc_catalog).
+#   --uc-schema <name>           UC schema within the catalog (var uc_schema).
+#   --sql-warehouse-id <id>      Existing warehouse id (var sql_warehouse_id). REQUIRED for target byo.
+#   --genie-consumer-group <g>   Workspace group granted CAN_RUN on the Genie space via the
+#                                genie_spaces.permissions block (OBO consumers; default group: users).
+#   --var k=v                    Extra bundle variable override (repeatable).
+#   -h, --help                   Show this help.
 #
-# Phases (full deploy): 0 preflight → 1 lakebase project → 2 build → 3 bundle deploy →
-#   4 bundle run (app deployment) → 5 seed → 6 Genie wire-up → 7 verify + URL.
-# Critical phases fail fast; seed/Genie/verify degrade gracefully so a partial failure still leaves
-# a working core app.
+# Phases (full deploy): 0 preflight → 1 lakebase project → 2 build (SPA + Genie-space JSON) →
+#   3 create operational tables (empty; so the Genie space's table validation passes pre-deploy) →
+#   4 bundle deploy (creates the Genie space + binds it to the app) → 5 bundle run (app deployment) →
+#   6 seed → 7 verify + URL.
+# Critical phases fail fast; seed/verify degrade gracefully so a partial failure still leaves a
+# working core app. The Genie space is a DABs resource now — created on bundle deploy, no wire-up phase.
+# Its create-API validates its tables EXIST, but the seed (which fills them) runs after deploy — so we
+# create them empty up front (phase 3) to keep the one-shot cold-start working on a fresh catalog.
 
 set -euo pipefail
 
 APP_RESOURCE_KEY="supply_chain_planner"          # stable DABs resource key (NOT the deployed name)
 SEED_JOB_KEY="setup_and_seed"
-MIN_CLI_VERSION="0.295.0"
+MIN_CLI_VERSION="1.3.0"          # resources.genie_spaces + direct deployment engine
 
 PROFILE="${DATABRICKS_CONFIG_PROFILE:-}"
 TARGET="dev"
@@ -56,6 +65,9 @@ while [[ $# -gt 0 ]]; do
     --app-only)              APP_ONLY=true; shift ;;
     --build-frontend)        BUILD_FRONTEND=true; shift ;;
     --no-build-frontend)     BUILD_FRONTEND=false; shift ;;
+    --uc-catalog)            EXTRA_VARS+=(--var "uc_catalog=$2"); shift 2 ;;
+    --uc-schema)             EXTRA_VARS+=(--var "uc_schema=$2"); shift 2 ;;
+    --sql-warehouse-id)      EXTRA_VARS+=(--var "sql_warehouse_id=$2"); shift 2 ;;
     --genie-consumer-group)  GENIE_CONSUMER_GROUP="$2"; shift 2 ;;
     --var)                   EXTRA_VARS+=(--var "$2"); shift 2 ;;
     -h|--help)               grep '^#' "$0" | grep -v '^#!' | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
@@ -65,6 +77,18 @@ done
 
 # Build by default on a full deploy; only when asked on --app-only.
 [[ -z "$BUILD_FRONTEND" ]] && { $APP_ONLY && BUILD_FRONTEND=false || BUILD_FRONTEND=true; }
+
+# --genie-consumer-group flows into the genie_spaces.permissions block via a bundle var override
+# (the seed no longer grants it — the DABs resource does). Default group is `users` (see databricks.yml).
+[[ -n "$GENIE_CONSUMER_GROUP" ]] && EXTRA_VARS+=(--var "genie_consumer_group=$GENIE_CONSUMER_GROUP")
+
+# The `byo` target omits the bundle-created warehouse (databricks.yml), so sql_warehouse_id has no
+# default there — fail fast with a clear message rather than a cryptic "variable has no value" from
+# bundle validate. (--sql-warehouse-id and --var sql_warehouse_id= both land in EXTRA_VARS.)
+if [[ "$TARGET" == "byo" ]]; then
+  printf '%s\n' ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"} | grep -q '^sql_warehouse_id=' \
+    || { echo "  ✗ target 'byo' omits the bundle-created warehouse — provide an existing one: --sql-warehouse-id <id>" >&2; exit 1; }
+fi
 
 # Run from the repo root (this script lives in scripts/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -112,9 +136,9 @@ preflight() {
   local ver
   ver=$(databricks -v 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
   if [[ -z "$ver" ]]; then
-    warn "Could not parse Databricks CLI version; need ≥ $MIN_CLI_VERSION for the autoscaling postgres resource."
+    warn "Could not parse Databricks CLI version; need ≥ $MIN_CLI_VERSION (resources.genie_spaces + direct engine)."
   elif python3 -c "import sys; v=tuple(map(int,'$ver'.split('.'))); m=tuple(map(int,'$MIN_CLI_VERSION'.split('.'))); sys.exit(0 if v<m else 1)"; then
-    die "Databricks CLI $ver is too old — need ≥ $MIN_CLI_VERSION (autoscaling \`postgres\` app resource). Upgrade and retry."
+    die "Databricks CLI $ver is too old — need ≥ $MIN_CLI_VERSION (resources.genie_spaces + direct deployment engine). Upgrade and retry."
   else
     ok "Databricks CLI $ver (≥ $MIN_CLI_VERSION)"
   fi
@@ -149,9 +173,10 @@ preflight() {
   ── Genie via OBO needs two manual, one-time steps this script cannot automate ──
    [ ] A workspace admin enables the "Databricks Apps – On-Behalf-Of-User Authorization" Public Preview.
    [ ] Each end user accepts the OAuth consent on first open (a stale browser session → 403 "invalid scope";
-       re-open in a fresh/incognito session). End users also need: CAN_RUN on the Genie space (pass
-       --genie-consumer-group <group> to grant it), CAN USE on a serverless/pro warehouse, and SELECT on
-       the underlying UC tables. Until then the app still works on every non-Genie route.
+       re-open in a fresh/incognito session). End users also need CAN USE on a serverless/pro warehouse and
+       SELECT on the underlying UC tables. (CAN_RUN on the Genie space is granted to `users` by the
+       genie_spaces.permissions block; scope tighter with --genie-consumer-group <group>.) Until then the
+       app still works on every non-Genie route.
 BANNER
 }
 
@@ -185,7 +210,7 @@ bundle_run_app() {
 }
 
 seed_demo_data() {
-  info "Seed demo data (operational + pgvector + Genie tables + Knowledge/VS)"
+  info "Seed demo data (operational + pgvector + Knowledge/VS)"
   if databricks bundle run "$SEED_JOB_KEY" "${TARGET_FLAG[@]}" "${PROFILE_FLAG[@]}" ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"}; then
     ok "seed job complete"
   else
@@ -194,57 +219,37 @@ seed_demo_data() {
   fi
 }
 
-# Patch the genie_space_id var default in databricks.yml so it's durable across full AND quick
-# redeploys (quick `make redeploy` doesn't re-run this phase, so the id must live in the bundle).
-patch_genie_space_id() {
-  python3 - "$1" <<'PY'
-import re, sys
-space_id = sys.argv[1]
-path = "databricks.yml"
-lines = open(path).readlines()
-in_block = done = False
-out = []
-for line in lines:
-    if re.match(r'^  genie_space_id:\s*$', line):
-        in_block = True
-    elif in_block and re.match(r'^  [A-Za-z0-9_]', line):
-        in_block = False
-    if in_block and not done and re.match(r'^    default:\s*', line):
-        line = f'    default: "{space_id}"\n'
-        done = True
-    out.append(line)
-open(path, "w").writelines(out)
-print("patched" if done else "no-change")
-PY
+# Generate the serialized Genie-space definition the `resources.genie_spaces` resource ships via
+# file_path. DABs doesn't substitute ${var} inside that JSON, so bake the target's resolved
+# catalog/schema in at generation time (bundle_var honors --var overrides). Runs before every
+# bundle deploy — full AND --app-only — so the file always exists and matches the target.
+build_geniespace() {
+  info "Generate Genie space definition (data/genie/supply_chain.geniespace.json) from genie_config.py"
+  local cat sch override=()
+  cat="$(bundle_var uc_catalog)"; sch="$(bundle_var uc_schema)"
+  [[ -n "$cat" ]] && override+=("UC_CATALOG=$cat")
+  [[ -n "$sch" ]] && override+=("UC_SCHEMA=$sch")
+  env ${override[@]+"${override[@]}"} uv run python data/genie/build_geniespace_json.py \
+    || die "Failed to generate supply_chain.geniespace.json (the genie_spaces resource needs it)."
+  ok "geniespace.json generated (${cat:-?}.${sch:-?})"
 }
 
-genie_wire_up() {
-  local existing; existing="$(bundle_var genie_space_id)"
-  if [[ -n "$existing" && "$existing" != "unset" ]]; then
-    info "Genie already wired (genie_space_id=$existing) — skipping bootstrap"
-    return
-  fi
-  info "Genie wire-up (create/find space → grant → capture id → redeploy)"
-  local gcg; gcg="${GENIE_CONSUMER_GROUP:-$(bundle_var genie_consumer_group)}"
-  local out sid
-  out=$(GENIE_CONSUMER_GROUP="$gcg" uv run python data/genie/02_create_genie_space.py 2>&1) || true
-  printf '%s\n' "$out" | sed 's/^/    /'
-  sid=$(printf '%s\n' "$out" | grep -oE 'GENIE_SPACE_ID=[0-9a-fA-F-]+' | head -1 | cut -d= -f2)
-  if [[ -z "$sid" ]]; then
-    warn "Could not create/capture the Genie space — Analytics route stays off (app works on every other route)."
-    DEGRADED+=("genie")
-    return
-  fi
-  if [[ "$(patch_genie_space_id "$sid")" == "patched" ]]; then
-    ok "Wired genie_space_id=$sid into databricks.yml (durable across redeploys)"
+# Create the operational schema + 5 EMPTY Delta tables BEFORE `bundle deploy`. The genie_spaces
+# resource's create-API validates that its referenced tables exist, but the seed (which fills them)
+# runs AFTER deploy — so on a fresh catalog the deploy would 403 ("schema/table does not exist").
+# Reuses the existing idempotent DDL script (data/genie/01_create_operational_schema.py), run locally
+# via Databricks Connect — so it needs NO warehouse (sidesteps the chicken-and-egg with the
+# bundle-created warehouse, which doesn't exist until bundle deploy). bundle_var honors --var/flags,
+# so this targets the same catalog/schema the Genie JSON was baked with. Idempotent → safe to re-run.
+create_operational_tables() {
+  info "Create operational schema + empty tables (so the Genie space's table validation passes)"
+  local cat sch
+  cat="$(bundle_var uc_catalog)"; sch="$(bundle_var uc_schema)"
+  if env UC_CATALOG="$cat" UC_SCHEMA="$sch" uv run python data/genie/01_create_operational_schema.py; then
+    ok "operational schema + empty tables ready (${cat:-?}.${sch:-?})"
   else
-    warn "Captured genie_space_id=$sid but could not patch databricks.yml; pass --var genie_space_id=$sid on future deploys."
+    die "Failed to create operational tables in '${cat:-?}.${sch:-?}'. Need CREATE SCHEMA/TABLE on the catalog; the local run uses Databricks Connect (set serverless_compute_id=auto in your profile). The Genie space create-API validates these tables EXIST."
   fi
-  info "Redeploy to apply genie_space_id"
-  databricks bundle deploy "${TARGET_FLAG[@]}" "${PROFILE_FLAG[@]}" ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"} \
-    && databricks bundle run "$APP_RESOURCE_KEY" "${TARGET_FLAG[@]}" "${PROFILE_FLAG[@]}" ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"} \
-    || { warn "Redeploy after Genie wiring failed; the id is saved — re-run make deploy."; DEGRADED+=("genie-redeploy"); }
-  BUNDLE_JSON=""
 }
 
 verify_and_report() {
@@ -283,8 +288,11 @@ verify_and_report() {
 
 # ── Orchestrate ─────────────────────────────────────────────────────────────────
 if $APP_ONLY; then
-  info "Quick deploy (--app-only): build(opt) → bundle deploy → bundle run"
+  # Fast loop: tables already exist from the first full deploy, so the Genie space validation passes
+  # on reconcile — skip create_operational_tables to keep the loop fast (no Databricks Connect spin-up).
+  info "Quick deploy (--app-only): build(opt) → genie-space JSON → bundle deploy → bundle run"
   if $BUILD_FRONTEND; then build_spa; fi
+  build_geniespace
   bundle_deploy
   bundle_run_app
   verify_and_report
@@ -294,11 +302,12 @@ fi
 preflight
 ensure_lakebase_project
 if $BUILD_FRONTEND; then build_spa; fi
+build_geniespace
+create_operational_tables
 bundle_deploy
 bundle_run_app
 if $SEED; then
   seed_demo_data
-  genie_wire_up
 else
   info "Skipping seed (--no-seed) — point uc_catalog/uc_schema at your own data"
 fi

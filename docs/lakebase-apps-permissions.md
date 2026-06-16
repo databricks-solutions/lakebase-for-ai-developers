@@ -265,8 +265,9 @@ no superuser grant on `public`, no `CREATE ON SCHEMA public` needed.
 
 ## Deploy-time requirements (recap)
 
-- **Databricks CLI ≥ v0.295** (`deploy.sh` enforces it in preflight; 0.294 first recognized the
-  `postgres` resource key, older versions treat it as an unknown field). See `docs/DEPLOYMENT_GUIDE.md` §2.
+- **Databricks CLI ≥ v1.3.0** (`deploy.sh` enforces it in preflight; required for the
+  `resources.genie_spaces` resource + the direct deployment engine, and it also covers the `postgres`
+  resource key added in 0.294). See `docs/DEPLOYMENT_GUIDE.md` §2.
 - The **deployer needs `CAN MANAGE` on the Lakebase project** to attach the `postgres` resource. See
   `docs/DEPLOYMENT_GUIDE.md` §6.A.
 - The `postgres` resource binds to a **pre-existing** project/branch/database — `deploy.sh` phase 1

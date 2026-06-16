@@ -1,0 +1,116 @@
+{
+  "config": {
+    "sample_questions": [
+      {
+        "id": "09b50bf1baa54a29ea751f1dde10f936",
+        "question": [
+          "What is the total open PO quantity by supplier for Q4 2026?"
+        ]
+      },
+      {
+        "id": "49046a3211e4fda542ff60249227348a",
+        "question": [
+          "Which suppliers can supply adhesives?"
+        ]
+      },
+      {
+        "id": "5696f3281eda1e376cbe4e027c2acbc4",
+        "question": [
+          "For SKU 'SKU-1001', what is the on-hand inventory vs the sum of open POs?"
+        ]
+      },
+      {
+        "id": "7f55417372acc85d7b0fc74405486148",
+        "question": [
+          "How many open POs are expected this month, broken out by supplier?"
+        ]
+      },
+      {
+        "id": "80593b7966d9cf6d97051f3f2a55e960",
+        "question": [
+          "Rank suppliers by risk_score, showing only those with status = 'at_risk'."
+        ]
+      },
+      {
+        "id": "f58e612b1e1cdadc73f4c026a3eda9ce",
+        "question": [
+          "Which SKUs have current on-hand quantity below 100 units?"
+        ]
+      }
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {
+        "description": [
+          "Current on-hand stock per SKU per location. Columns: sku, location, on_hand_qty, last_updated. Use MAX(last_updated) per (sku, location) for the current snapshot."
+        ],
+        "identifier": "serverless_stable_yau46e_catalog.planner.inventory"
+      },
+      {
+        "description": [
+          "SKU master. Columns: sku (PK), name, category, list_price. Join key for inventory and purchase_orders."
+        ],
+        "identifier": "serverless_stable_yau46e_catalog.planner.product_dim"
+      },
+      {
+        "description": [
+          "Open and historical POs. Columns: po_id (PK), supplier_id, sku, qty, expected_date, status (one of: open, in_transit, delivered, cancelled). Filter status != 'cancelled' for fulfillment math unless asked otherwise."
+        ],
+        "identifier": "serverless_stable_yau46e_catalog.planner.purchase_orders"
+      },
+      {
+        "description": [
+          "Rolling supplier risk + on-time score. Columns: supplier_id, status (one of: healthy, watch, at_risk), risk_score (0-100), last_updated. Use MAX(last_updated) per supplier_id for current state."
+        ],
+        "identifier": "serverless_stable_yau46e_catalog.planner.supplier_status"
+      },
+      {
+        "description": [
+          "Master data for upstream suppliers. Columns: supplier_id (PK), name, country, categories (comma-sep). Join key for purchase_orders and supplier_status."
+        ],
+        "identifier": "serverless_stable_yau46e_catalog.planner.suppliers"
+      }
+    ]
+  },
+  "instructions": {
+    "example_question_sqls": [
+      {
+        "id": "4bd86b6630e4c589d398412150caeec8",
+        "question": [
+          "Suppliers at risk, ranked by risk_score"
+        ],
+        "sql": [
+          "WITH latest AS (  SELECT supplier_id, status, risk_score,          ROW_NUMBER() OVER (PARTITION BY supplier_id ORDER BY last_updated DESC) rn   FROM serverless_stable_yau46e_catalog.planner.supplier_status) SELECT s.name, l.status, l.risk_score FROM latest l JOIN serverless_stable_yau46e_catalog.planner.suppliers s ON s.supplier_id = l.supplier_id WHERE l.rn = 1 AND l.status = 'at_risk' ORDER BY l.risk_score DESC"
+        ]
+      },
+      {
+        "id": "55548912ff526c6b158c91725e04d6e5",
+        "question": [
+          "Total open PO quantity by supplier for Q4"
+        ],
+        "sql": [
+          "SELECT s.name AS supplier, SUM(po.qty) AS open_qty FROM serverless_stable_yau46e_catalog.planner.purchase_orders po JOIN serverless_stable_yau46e_catalog.planner.suppliers s ON s.supplier_id = po.supplier_id WHERE po.status = 'open'   AND po.expected_date BETWEEN '2026-10-01' AND '2026-12-31' GROUP BY s.name ORDER BY open_qty DESC"
+        ]
+      },
+      {
+        "id": "ec430934e4f32e14a1acaec67b85957d",
+        "question": [
+          "On-hand vs open POs for SKU 'SKU-1001'"
+        ],
+        "sql": [
+          "WITH inv_latest AS (  SELECT sku, location, on_hand_qty,          ROW_NUMBER() OVER (PARTITION BY sku, location ORDER BY last_updated DESC) rn   FROM serverless_stable_yau46e_catalog.planner.inventory WHERE sku = 'SKU-1001'), inv AS (  SELECT sku, SUM(on_hand_qty) AS on_hand FROM inv_latest WHERE rn = 1 GROUP BY sku), po AS (  SELECT sku, SUM(qty) AS open_po FROM serverless_stable_yau46e_catalog.planner.purchase_orders   WHERE sku = 'SKU-1001' AND status = 'open' GROUP BY sku) SELECT inv.sku, inv.on_hand, po.open_po, (po.open_po - inv.on_hand) AS gap FROM inv FULL OUTER JOIN po ON inv.sku = po.sku"
+        ]
+      }
+    ],
+    "text_instructions": [
+      {
+        "content": [
+          "When the user asks about 'fulfillment' or 'unfulfilled demand', interpret as (SUM(open_po qty) - SUM(on_hand qty)) per SKU. When they ask about a supplier by name, join through suppliers.name. To find suppliers for a category, filter suppliers.categories (a comma-separated list) with LIKE '%<category>%'. Always exclude rows where purchase_orders.status = 'cancelled' unless the user asks specifically about cancellations. 'Current' or 'at-risk' supplier state means the latest supplier_status row per supplier (MAX(last_updated)); 'at-risk' means that latest status = 'at_risk'. 'Current' inventory means the latest row per (sku, location) by last_updated; sum across locations for a per-SKU on-hand total."
+        ],
+        "id": "fdc1ac87726904977d8646c61a0a4b3f"
+      }
+    ]
+  },
+  "version": 2
+}
