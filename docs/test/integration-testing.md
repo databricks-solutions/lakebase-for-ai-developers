@@ -6,9 +6,31 @@ Databricks)** or **on Databricks compute**. The keystone test is
 it exercises the whole operational path in one run — Lakebase auth → pgvector index → embedding
 endpoint → the synced relational tables → the hybrid join.
 
-> Scope today: **operational (Lakebase) + Genie (Analytics)** are fully testable. The full agent
-> end-to-end (supervisor → planner → HITL) is **pending** — `agent_server/tools/operational_tool.py`
-> is still a stub; the resolved hybrid query in §5 hasn't been wired in yet. See [§6](#6-not-yet-wired).
+> Two layers: the **cold-start E2E** (next section) validates a whole fresh deploy in one command;
+> the **tiers** below are granular local/stack checks (data, the hybrid query, Genie). The operational
+> hybrid query is wired into the agent (`operational_tool.py`); see [§6](#6-agent-e2e-full-graph).
+
+## Cold-start E2E — validate a fresh deploy (one command)
+
+The fastest way to prove a **fresh-workspace** deploy actually works — genie table-ordering, the
+BYO-warehouse path, the seed (incl. pgvector), and the Lakebase permission contract — is the
+cold-start harness. It deploys to a **throwaway** Lakebase project + UC schema in an isolated git
+worktree, runs `verify_deploy`, then tears everything down. Teardown is always safe: the app service
+principal only ever owns schemas inside a project that's deleted wholesale (no orphaned-schema risk —
+see [`../lakebase-apps-permissions.md`](../lakebase-apps-permissions.md)).
+
+```bash
+make integration-test PROFILE=<p> CATALOG=<existing-writable-catalog>
+# restricted workspace (deployer can't create a SQL warehouse):
+make integration-test PROFILE=<p> CATALOG=main ITEST_ARGS="--target byo --sql-warehouse-id <id>"
+```
+
+- Tests **committed** code (HEAD) — commit first. Prereqs: same as `make deploy` plus
+  `serverless_compute_id=auto` in the profile (the harness defaults it) and CREATE on `CATALOG`.
+- **Green run** = deploy + seed + `verify_deploy` all pass, then clean teardown (no leftovers).
+- Full flags + guardrails: the **`integration-test` skill** or `scripts/integration_test.sh --help`.
+- On a borrowed catalog you don't own (e.g. `main`), MLflow UC-tracing degrades to artifact storage
+  (the grant needs `MANAGE` on the trace catalog) — non-fatal; every route still works.
 
 ## Test tiers
 
@@ -19,7 +41,7 @@ endpoint → the synced relational tables → the hybrid join.
 | **2 — Operational integration** | `04_verify_hybrid_query.py` — hero scenario + access scoping | Yes (Lakebase + embeddings) | local or Databricks |
 | **3 — Genie integration** | Ask the certified `eval_set.py` questions, assert the literals | Yes (Genie space + warehouse) | local or Databricks |
 | **4 — Knowledge (P1)** | PDFs → chunks → Vector Search | Yes | local + Databricks |
-| **5 — Agent E2E** | Full graph run with HITL + MLflow trace | Yes | pending wiring |
+| **5 — Agent E2E** | Full graph run with HITL + MLflow trace | Yes | eval flywheel / manual /ui (§6) |
 
 Run them in order; each tier assumes the previous passed.
 
@@ -176,14 +198,15 @@ Paste the printed `VECTOR_SEARCH_ENDPOINT` / `VECTOR_SEARCH_INDEX` into `.env`.
 
 ---
 
-## 6. Not yet wired (agent E2E)
+## 6. Agent E2E (full graph)
 
-`agent_server/tools/operational_tool.py` is still the **stub** — the resolved hybrid query (validated
-in Tier 2) hasn't been dropped into it, so a full supervisor → gather → planner → gate → HITL →
-commit run won't hit the seeded Lakebase data yet. Wiring that is the prerequisite for a true Tier 5
-test, whose pass criteria will be: the canonical question routes correctly, Operational + Genie return
-real rows, the planner trips the gate, the HITL `interrupt()` pauses and resumes from the Lakebase
-checkpoint, and the whole run is one coherent MLflow trace.
+`agent_server/tools/operational_tool.py` now runs the resolved hybrid query against seeded Lakebase
+data, so a full supervisor → gather → planner → gate → HITL → commit run hits real rows. What isn't an
+automated test *here* yet is the whole-graph run itself — covered today by the **eval flywheel**
+(`agent_server/evaluation/`, the `flywheel` skill) and a manual `/ui` smoke. A dedicated Tier 5 would
+assert: the canonical question routes correctly, Operational + Genie return real rows, the planner
+trips the gate, the HITL `interrupt()` pauses and resumes from the Lakebase checkpoint, and the whole
+run is one coherent MLflow trace.
 
 ---
 

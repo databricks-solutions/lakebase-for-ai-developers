@@ -166,6 +166,10 @@ Open the app URL `/ui`, ask *"Have we seen a disruption like the PrecisionBond r
 and confirm a traced answer. Traces land in the bundle's experiment
 (`/Users/<you>/supply_chain_planner-<target>-traces`); 👍/👎 attach as assessments.
 
+> **Validate a whole *fresh* deploy automatically** (deploy → seed → verify → teardown, all against
+> throwaway resources, safe to run anytime): `make integration-test PROFILE=<p> CATALOG=<catalog>`.
+> See [`test/integration-testing.md`](test/integration-testing.md).
+
 ## Tear down
 
 ```bash

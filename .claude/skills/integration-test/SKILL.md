@@ -14,8 +14,8 @@ created before `bundle deploy`).
 ## When to use it
 
 - After changing `scripts/deploy.sh`, `databricks.yml`, or the seed — before opening a PR.
-- To reproduce / regression-test the cold-start blockers documented in
-  [`docs/PLAN-genie-coldstart-and-integration-test.md`](../../../docs/PLAN-genie-coldstart-and-integration-test.md).
+- To regression-test the cold-start path (genie table-ordering, BYO-warehouse, pgvector) — see the
+  cold-start E2E section in [`docs/test/integration-testing.md`](../../../docs/test/integration-testing.md).
 - To validate a fresh-workspace deploy without hand-clicking through the UI.
 
 This is **not** a fast check — it provisions a real Lakebase project + app (~10 min) and then deletes
