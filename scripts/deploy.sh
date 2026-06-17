@@ -262,7 +262,16 @@ verify_and_report() {
 
   if $VERIFY && [[ -n "$app_name" ]]; then
     info "Verify deployed state (Lakebase + operational + write-back + SP grant)"
-    if APP_NAME="$app_name" uv run python scripts/verify_deploy.py; then
+    # Pass the resolved per-target Lakebase coords so verify checks the ACTUAL deployed tier — its
+    # branch + tier-named write-back schema — instead of falling back to whatever .env points at
+    # (which would verify `production`/canonical even for a dev/staging deploy). See docs/state-lifecycle.md.
+    if APP_NAME="$app_name" \
+       LAKEBASE_AUTOSCALING_PROJECT="$(bundle_var lakebase_project)" \
+       LAKEBASE_AUTOSCALING_BRANCH="$(bundle_var lakebase_branch)" \
+       LAKEBASE_AUTOSCALING_ENDPOINT="$(bundle_var lakebase_endpoint)" \
+       LAKEBASE_AGENT_MEMORY_SCHEMA="$(bundle_var lakebase_agent_memory_schema)" \
+       LAKEBASE_WRITEBACK_SCHEMA="$(bundle_var lakebase_writeback_schema)" \
+       uv run python scripts/verify_deploy.py; then
       ok "verify_deploy passed"
     else
       warn "verify_deploy reported failures (see above) — app may still be usable; investigate the FAIL lines."

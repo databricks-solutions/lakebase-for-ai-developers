@@ -14,6 +14,10 @@ data-gen scripts (`data/operational/_lakebase.connect`) — so it targets **what
 your current `.env`/config points at** (`LAKEBASE_AUTOSCALING_BRANCH`). To grant on `production`,
 point your config at the production branch first. GRANTs are idempotent.
 
+`--schema` defaults to `settings.lakebase_memory_schema`, which is **tier-named on non-prod branches**
+(`staging_memory`, `dev_memory`, …) — pass `--schema` explicitly to target a specific tier's schema.
+See docs/state-lifecycle.md → "Schema ownership on forked branches".
+
 Usage:
     uv run python scripts/grant_lakebase_permissions.py <principal> [--schema S] [--mode read|langgraph]
 

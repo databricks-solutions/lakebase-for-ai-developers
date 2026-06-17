@@ -79,6 +79,21 @@ variables:
   lakebase_database_resource:
     description: "Internal Lakebase database resource name for the `postgres` app resource — deterministic kebab-case of `lakebase_database`; verify with `databricks api get /api/2.0/postgres/projects/<p>/branches/<b>/databases`."
     default: databricks-postgres
+  # Agent-state schema names. The app SP CREATES + OWNS these at startup (it has CREATE on the DB via
+  # the `postgres` resource), so each name MUST be one no other SP already owns. On a branch FORKED
+  # from production (dev/staging), production's canonical schemas come along OWNED BY THE PROD APP SP
+  # — and they CANNOT be dropped or reassigned by the deploy: Lakebase has no usable Postgres
+  # superuser (`databricks_superuser` is not `rolsuper` and `SET ROLE` to it is denied), and the
+  # deployer isn't a member of the prod SP role. So non-prod tiers must use a DISTINCT name the tier
+  # SP can create fresh; the inherited canonical schemas just sit unused. prod/demo/byo keep the
+  # canonical default (prod owns it natively; byo is a cold workspace); staging/dev override below.
+  # See docs/state-lifecycle.md → "Schema ownership on forked branches".
+  lakebase_agent_memory_schema:
+    description: Schema for the LangGraph checkpointer + store. Canonical on prod; tier-named on dev/staging.
+    default: supply_chain_planner_memory
+  lakebase_writeback_schema:
+    description: Schema for the Meridian write-back tables. Canonical on prod; tier-named on dev/staging.
+    default: supply_chain_planner_app
   # NOTE: the operational synced tables live in uc_catalog (schema `public`), NOT a separate
   # Lakebase-registered catalog — the synced-table spec carries its own branch + postgres_database,
   # so a plain writable catalog works and the bundle creates the `public` schema in it. One catalog
@@ -226,14 +241,17 @@ resources:
           - name: LAKEBASE_DATABASE
             value: ${var.lakebase_database}
           - name: LAKEBASE_AGENT_MEMORY_SCHEMA
-            # The app SP creates + OWNS this schema at startup (it has CREATE on the DB via the
-            # postgres resource). It must be a name no prior/defunct SP already owns — a schema owned
-            # by an old SP (e.g. after an app delete+recreate) can't be written by the new SP and the
-            # checkpointer falls through to `public` → "permission denied for schema public" crash.
-            # See docs/lakebase-apps-permissions.md (SP-recreate orphaned-schema lifecycle).
-            value: "supply_chain_planner_memory"
+            # The app SP creates + OWNS this schema at startup (CREATE on the DB via the postgres
+            # resource). It must be a name NO other/defunct SP already owns: a schema owned by a
+            # different SP — production's canonical schema inherited on a forked dev/staging branch, or
+            # an orphaned SP after an app delete+recreate — can't be written by this SP, the
+            # checkpointer falls through to `public`, and startup crashes ("permission denied for
+            # schema public"). Such a schema also can't be dropped (no usable superuser). So the value
+            # is per-target: prod/demo/byo use the canonical default; dev/staging override the var to a
+            # tier-owned name. See docs/state-lifecycle.md → "Schema ownership on forked branches".
+            value: ${var.lakebase_agent_memory_schema}
           - name: LAKEBASE_WRITEBACK_SCHEMA
-            value: "supply_chain_planner_app"
+            value: ${var.lakebase_writeback_schema}
           - name: LAKEBASE_OPERATIONAL_SCHEMA
             value: "public"
           - name: LAKEBASE_UC_CATALOG
@@ -454,6 +472,13 @@ targets:
       # Shared dev branch by default; for per-developer isolation pass --var lakebase_branch=dev-<name>
       # (see docs/state-lifecycle.md → per-developer isolation).
       lakebase_branch: development
+      # Tier-owned agent-state schemas. `development` is forked from production, whose canonical
+      # schemas are owned by the prod app SP and can't be dropped/reused (no superuser) — so the dev
+      # app SP creates + owns these fresh instead. Shared across devs on the shared `development`
+      # branch; for concurrent multi-dev isolation give each dev their own branch
+      # (--var lakebase_branch=dev-<name>) or schema (--var lakebase_agent_memory_schema=dev_<name>_memory).
+      lakebase_agent_memory_schema: dev_memory
+      lakebase_writeback_schema: dev_app
       sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
     resources:
       sql_warehouses:
@@ -491,9 +516,12 @@ targets:
           name: supply-chain-planner
 
   # ── Promotion lifecycle (dev → staging → prod) ──────────────────────────────────────────────
-  # Each tier is isolated by its own Lakebase BRANCH within the one project (branch-per-environment;
-  # agent-memory schema names are identical across branches — isolation is the branch, not a prefix).
-  # deploy.sh's Phase-1 ensure_lakebase_project.py forks the branch from `production` if it's missing.
+  # Each tier is isolated by its own Lakebase BRANCH within the one project (branch-per-environment).
+  # Agent-state SCHEMA names differ per tier (lakebase_agent_memory_schema / lakebase_writeback_schema
+  # above): prod owns the canonical names natively, but a branch forked from production inherits those
+  # canonical schemas owned by the prod app SP — un-droppable downstream — so dev/staging must create
+  # their own tier-named schemas. deploy.sh's Phase-1 ensure_lakebase_project.py forks the branch from
+  # `production` if it's missing.
   # Each tier creates its own warehouse (reuses the &app_sql_warehouse anchor from `dev`, which is
   # defined earlier in the file). See docs/state-lifecycle.md for the full topology + rationale.
 
@@ -509,6 +537,11 @@ targets:
     variables:
       app_name: supply-chain-planner-staging
       lakebase_branch: staging
+      # Tier-owned agent-state schemas — the staging app SP creates + owns these fresh on the forked
+      # `staging` branch (production's canonical schemas are inherited there but owned by the prod app
+      # SP and can't be reused/dropped). See docs/state-lifecycle.md.
+      lakebase_agent_memory_schema: staging_memory
+      lakebase_writeback_schema: staging_app
       sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
     resources:
       sql_warehouses:

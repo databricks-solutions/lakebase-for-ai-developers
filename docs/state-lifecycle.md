@@ -10,13 +10,17 @@
 
 All durable state lives on **Lakebase (Postgres)**. The vetted Lakebase pattern for stateful agents
 is **one autoscaling project with a copy-on-write branch per environment** — *not* a separate
-project or a schema prefix per environment. Branches are the isolation unit; the agent-memory
-schema names stay **identical across branches** (isolation is the branch, not a name suffix).
+project per environment. Branches are the primary isolation unit. The **operational** schema
+(`public`) keeps the same name on every branch (it's platform-owned and just re-granted), but the
+**agent-state** schemas (checkpointer/store + write-back) are **tier-named on non-prod branches** —
+a branch forked from production *cannot* reuse production's canonical schema names, for the reasons in
+[Schema ownership on forked branches](#schema-ownership-on-forked-branches).
 
 - **Analytics layer** (UC catalogs/schemas) is separated independently via `uc_catalog`/`uc_schema`.
 - **Tenant/domain** isolation would use separate *projects* (not relevant here).
-- **Functional grouping** inside one DB uses *schemas* (we already do: `public` operational,
-  `supply_chain_planner_memory`, `supply_chain_planner_app`).
+- **Functional grouping** inside one DB uses *schemas*: `public` (operational) plus the per-tier
+  agent-state schemas — `supply_chain_planner_memory`/`_app` on prod, `staging_memory`/`staging_app`
+  on staging, `dev_memory`/`dev_app` on dev.
 
 Lakebase is **workspace-scoped**, so branch-per-environment assumes one workspace/project. If a
 tier must live in its own workspace (e.g. a locked-down prod), use a separate project there and
@@ -44,18 +48,19 @@ flowchart TB
     A4["Local IDE<br/>your U2M identity<br/>personal schema dev_{you}_memory"] ==> DEV
 ```
 
-Every branch carries the **same schema names** — isolation is the branch, not a name prefix. Solid
-arrows = a DABs target/app deploys to and reads+writes that branch; dotted arrows = copy-on-write
-fork from `production`.
+Solid arrows = a DABs target/app deploys to and reads+writes that branch; dotted arrows =
+copy-on-write fork from `production`. The branch is the isolation unit; agent-state schema *names*
+additionally differ per tier on forked branches (see
+[Schema ownership on forked branches](#schema-ownership-on-forked-branches)).
 
-| Tier | DABs target | Lakebase branch | DABs mode | App name | SQL warehouse |
-|------|-------------|-----------------|-----------|----------|---------------|
-| Local IDE | — | `development` (via `.env`) | — | — | — |
-| Dev | `dev` (default) | `development` | development | `<user>`-prefixed | bundle-created |
-| Staging | `staging` | `staging` | production | `supply-chain-planner-staging` | bundle-created |
-| Prod | `prod` | `production` | production | `supply-chain-planner` | bundle-created |
-| Demo (legacy) | `demo` | `production` | production | `supply-chain-planner` | bundle-created |
-| BYO (restricted ws) | `byo` | `production` | development | `<user>`-prefixed | **you provide** |
+| Tier | DABs target | Lakebase branch | DABs mode | App name | Agent-state schemas | SQL warehouse |
+|------|-------------|-----------------|-----------|----------|---------------------|---------------|
+| Local IDE | — | `development` (via `.env`) | — | — | `dev_<you>_memory` / `_app` | — |
+| Dev | `dev` (default) | `development` | development | `<user>`-prefixed | `dev_memory` / `dev_app` | bundle-created |
+| Staging | `staging` | `staging` | production | `supply-chain-planner-staging` | `staging_memory` / `staging_app` | bundle-created |
+| Prod | `prod` | `production` | production | `supply-chain-planner` | `supply_chain_planner_memory` / `_app` (canonical) | bundle-created |
+| Demo (legacy) | `demo` | `production` | production | `supply-chain-planner` | canonical | bundle-created |
+| BYO (restricted ws) | `byo` | `production` | development | `<user>`-prefixed | canonical (cold workspace) | **you provide** |
 
 `production` is the Lakebase project's **default branch** (created with the project). `development`,
 `staging` (and any `dev-*`/`ci-*`) are **forked from `production`** (copy-on-write) by the deploy
@@ -65,8 +70,10 @@ lifecycle.
 ### What's isolated by branch vs. shared
 
 - **Isolated per branch:** the LangGraph checkpointer tables, the `AsyncDatabricksStore`
-  (`store` / `store_vectors`), the Meridian write-back tables (`supply_chain_planner_app`), and the
-  operational synced tables (`public`). Each tier sees only its own copy.
+  (`store` / `store_vectors`), the Meridian write-back tables, and the operational synced tables
+  (`public`). Each tier sees only its own copy. On non-prod branches the checkpointer/store + write-back
+  live in **tier-named** schemas (e.g. `staging_memory`/`staging_app`), not the canonical names — see
+  [Schema ownership on forked branches](#schema-ownership-on-forked-branches).
 - **Shared across tiers:** the analytics layer is governed by `uc_catalog`/`uc_schema`, which you
   set per-tier (`--var uc_catalog=...`). By default all tiers point at the same catalog; point
   staging/prod at their own governed catalogs when you want env-specific data.
@@ -81,8 +88,46 @@ branch or schema names, two developers deploying `dev` to one workspace each got
 both trying to own the *same* schema on the *same* branch → the second hit the fatal
 foreign-owned-schema crash (see [`lakebase-apps-permissions.md`](lakebase-apps-permissions.md)).
 
-Branch-per-environment removes both problems: dev writes to `development`, prod to `production`,
-and each tier's app SP owns its schema on its own branch.
+Branch-per-environment fixes the **prod-pollution** problem: dev writes to `development`, prod to
+`production`. It does **not**, on its own, give each tier ownership of the *canonical* schema — a
+forked branch inherits production's schemas owned by the prod app SP. That second half is fixed by
+**tier-named agent-state schemas** (next section), so each tier's app SP creates and owns its own
+schema on its own branch.
+
+## Schema ownership on forked branches
+
+A copy-on-write fork copies production's data **and its Postgres ownership**. So `development` and
+`staging` — forked from `production` — start with `supply_chain_planner_memory`,
+`supply_chain_planner_app`, and `agent_server` **owned by the prod app service principal**, not the
+tier's SP. (Verified live: on the `development` branch all three are owned by the prod app SP's role
+`ebc85705-…`, while `public` is `pg_database_owner`.)
+
+That breaks a different-SP tier on startup: `ensure_memory_schema()` /
+`ensure_writeback_tables()` find the schema foreign-owned, the app SP can't write it, and
+`checkpointer.setup()` crashes with `permission denied for schema`. And the inherited schema **cannot
+be removed or reassigned by the deploy**:
+
+- No usable superuser exists — `databricks_superuser` is **not** `rolsuper`, and `SET ROLE
+  databricks_superuser` is **denied** to the deployer.
+- The deployer is **not a member** of the prod SP role, so it can neither `DROP` the schema (not the
+  owner / not superuser) nor `ALTER … OWNER` / `REASSIGN OWNED` it.
+
+So we **sidestep**, not drop: each non-prod tier's app uses a **tier-named** schema
+(`staging_memory`/`staging_app`, `dev_memory`/`dev_app`) that doesn't exist on the fork. The tier's
+SP has `CREATE` on the database (via the `postgres` app resource), so it **creates + owns** those
+fresh on first boot. The inherited canonical schemas just sit there, unused and harmless. This is the
+same per-identity-schema pattern already used for [local development](#local-development-validated-2026-06-16).
+
+Two consequences to know:
+
+- **`public` (operational) is fine as-is.** It's platform-owned (`pg_database_owner`), so the fork's
+  copy needs no ownership change — the seed's `grant_app_sp` task just re-grants the tier SP
+  `USAGE`/`SELECT`. Keep it forked (a prod-shaped snapshot for testing).
+- **`agent_server` (durable/background store) degrades on non-prod tiers.** Its schema name is
+  **hard-coded** in `databricks-ai-bridge` (not renamable), so on a forked branch it stays prod-SP-owned.
+  This is **non-fatal**: only background mode + its stale-response scanner degrade; the synchronous
+  invoke/stream path, agent memory (checkpointer/store), and write-back all work. (`DROP SCHEMA
+  agent_server CASCADE` is impossible here for the same privilege reasons — it's owned by the prod SP.)
 
 ## Branch provisioning (automated)
 
@@ -143,7 +188,9 @@ of which environment the app was running in.
 ## Local development (validated 2026-06-16)
 
 Run locally against a **non-production** branch with a **per-identity memory schema** — never the
-app SP's schema. Reason: the production agent-state schemas (`supply_chain_planner_memory`,
+app SP's schema. This is the same mechanism the deployed `dev`/`staging` tiers use (tier-named
+schemas, see [Schema ownership on forked branches](#schema-ownership-on-forked-branches)); locally
+the "tier" is *you*. Reason: the production agent-state schemas (`supply_chain_planner_memory`,
 `supply_chain_planner_app`, and the durable `agent_server`) are **owned by the deployed app service
 principal**, and a copy-on-write fork **inherits that ownership**. A local U2M identity therefore
 cannot create/write those schemas on `production` *or* on a branch forked from it —
@@ -184,6 +231,11 @@ on your dev branch + restart if you need background mode locally.
 **Implemented (this change):**
 - **R1** — per-target `lakebase_branch`; new `staging` and `prod` targets; dev moved off
   `production` onto `development`.
+- **R1b** — per-target **tier-named agent-state schemas** (`lakebase_agent_memory_schema` /
+  `lakebase_writeback_schema`): prod/demo/byo keep the canonical names, dev → `dev_*`, staging →
+  `staging_*`. Needed because a forked branch inherits production's canonical schemas owned by the
+  prod app SP and they can't be dropped/reassigned downstream (see
+  [Schema ownership on forked branches](#schema-ownership-on-forked-branches)).
 - **R2** — branch provisioning automation in `ensure_lakebase_project.py` (+ deploy.sh passes the
   branch).
 - **R3** — `APP_ENV` surfaced from `bundle.target`, read into `settings.app_env`, stamped on traces.
@@ -204,6 +256,8 @@ on your dev branch + restart if you need background mode locally.
 make deploy PROFILE=<p> TARGET=dev       # → development branch (default)
 make deploy PROFILE=<p> TARGET=staging   # → staging branch (forked from production if missing)
 make deploy PROFILE=<p> TARGET=prod      # → production branch
-# Per-developer dev isolation (until R4 automates it):
+# Per-developer dev isolation (until R4 automates it) — own branch, or own schema on the shared branch:
 make deploy PROFILE=<p> TARGET=dev --var lakebase_branch=dev-<yourname>
+make deploy PROFILE=<p> TARGET=dev --var lakebase_agent_memory_schema=dev_<yourname>_memory \
+                                   --var lakebase_writeback_schema=dev_<yourname>_app
 ```
