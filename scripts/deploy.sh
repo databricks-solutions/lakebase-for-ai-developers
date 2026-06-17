@@ -14,8 +14,10 @@
 #
 # Options:
 #   --profile, -p <name>         Databricks CLI profile (or export DATABRICKS_CONFIG_PROFILE).
-#   --target,  -t <dev|demo|byo>  DABs target (default: dev). `byo` omits the bundle-created warehouse
-#                                for restricted workspaces — requires --sql-warehouse-id.
+#   --target,  -t <dev|staging|prod|demo|byo>  DABs target (default: dev). Each isolates state on its
+#                                own Lakebase branch (dev→development, staging→staging, prod/demo→
+#                                production). `byo` omits the bundle-created warehouse for restricted
+#                                workspaces — requires --sql-warehouse-id. See docs/state-lifecycle.md.
 #   --no-seed                    Skip the demo-data seed job (bring your own data).
 #   --no-verify                  Skip the post-deploy smoke check.
 #   --app-only                   Fast path: only build(opt) + bundle deploy + bundle run + report.
@@ -30,7 +32,7 @@
 #   --var k=v                    Extra bundle variable override (repeatable).
 #   -h, --help                   Show this help.
 #
-# Phases (full deploy): 0 preflight → 1 lakebase project → 2 build (SPA + Genie-space JSON) →
+# Phases (full deploy): 0 preflight → 1 lakebase project + branch → 2 build (SPA + Genie-space JSON) →
 #   3 create operational tables (empty; so the Genie space's table validation passes pre-deploy) →
 #   4 bundle deploy (creates the Genie space + binds it to the app) → 5 bundle run (app deployment) →
 #   6 seed → 7 verify + URL.
@@ -182,10 +184,13 @@ BANNER
 
 # ── Phase helpers ───────────────────────────────────────────────────────────────
 ensure_lakebase_project() {
-  info "Ensure Lakebase autoscaling project (idempotent)"
-  LAKEBASE_PROJECT="$(bundle_var lakebase_project)" uv run python scripts/ensure_lakebase_project.py \
-    || die "Lakebase project provisioning failed (need CAN MANAGE to create/attach). See scripts/ensure_lakebase_project.py output above."
-  ok "Lakebase project ready"
+  info "Ensure Lakebase autoscaling project + branch (idempotent)"
+  # Pass the resolved per-target branch (dev→development, staging→staging, prod→production); the
+  # script forks it from `production` copy-on-write if it doesn't exist. See docs/state-lifecycle.md.
+  LAKEBASE_PROJECT="$(bundle_var lakebase_project)" LAKEBASE_BRANCH="$(bundle_var lakebase_branch)" \
+    uv run python scripts/ensure_lakebase_project.py \
+    || die "Lakebase project/branch provisioning failed (need CAN MANAGE to create/attach). See scripts/ensure_lakebase_project.py output above."
+  ok "Lakebase project + branch ready"
 }
 
 build_spa() {

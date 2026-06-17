@@ -64,7 +64,11 @@ variables:
     description: Lakebase autoscaling project id (e.g. mfg-supply-chain-copilot).
     default: mfg-supply-chain-copilot
   lakebase_branch:
-    description: Lakebase branch.
+    # Lakebase branch = the environment boundary (one project, branch-per-environment). OVERRIDDEN
+    # PER-TARGET below: dev → development, staging → staging, prod/demo/byo → production. The default
+    # here is `production` so any unspecified deploy is safe; deploy.sh creates the branch (forked
+    # from production) if it doesn't exist yet. See docs/state-lifecycle.md.
+    description: Lakebase branch (the per-environment state boundary). Set per-target; default production.
     default: production
   lakebase_endpoint:
     description: Lakebase endpoint name on the branch.
@@ -260,6 +264,12 @@ resources:
           - name: LLM_PLANNER_ENDPOINT
             value: ${var.llm_endpoint}
 
+          # Deployment environment — the DABs target (dev/staging/prod/demo/byo). Surfaced so the
+          # app can stamp traces/logs with the environment (the target is otherwise invisible to the
+          # running app). Read as settings.app_env. See docs/state-lifecycle.md.
+          - name: APP_ENV
+            value: ${bundle.target}
+
           - name: LOG_LEVEL
             value: ${var.log_level}
 
@@ -439,6 +449,11 @@ targets:
     mode: development
     default: true
     variables:
+      # Dev iteration writes agent state to the `development` branch — NOT `production`. (Previously
+      # dev inherited the `production` default, so `make deploy TARGET=dev` polluted prod state.)
+      # Shared dev branch by default; for per-developer isolation pass --var lakebase_branch=dev-<name>
+      # (see docs/state-lifecycle.md → per-developer isolation).
+      lakebase_branch: development
       sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
     resources:
       sql_warehouses:
@@ -474,6 +489,46 @@ targets:
       apps:
         supply_chain_planner:
           name: supply-chain-planner
+
+  # ── Promotion lifecycle (dev → staging → prod) ──────────────────────────────────────────────
+  # Each tier is isolated by its own Lakebase BRANCH within the one project (branch-per-environment;
+  # agent-memory schema names are identical across branches — isolation is the branch, not a prefix).
+  # deploy.sh's Phase-1 ensure_lakebase_project.py forks the branch from `production` if it's missing.
+  # Each tier creates its own warehouse (reuses the &app_sql_warehouse anchor from `dev`, which is
+  # defined earlier in the file). See docs/state-lifecycle.md for the full topology + rationale.
+
+  # Staging: prod-shaped validation tier on the `staging` branch. Distinct app name (-staging) so it
+  # can coexist with prod in the same workspace/project — Lakebase branches share one workspace, so
+  # the staging and prod apps live side by side and must not collide on name. Setting `app_name` (not
+  # overriding apps.<key>.name) keeps the seed's APP_NAME — which resolves the app SP for grant_app_sp
+  # — in sync with the actual app name.
+  staging:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      app_name: supply-chain-planner-staging
+      lakebase_branch: staging
+      sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
+    resources:
+      sql_warehouses:
+        app_sql_warehouse: *app_sql_warehouse
+
+  # Prod: the production tier on the protected `production` branch (the project's default branch).
+  # Clean fixed app name. NOTE: the legacy `demo` target is functionally equivalent (mode:production
+  # on the same `production` branch + same app name) — it predates this lifecycle and is retained as
+  # a one-off showcase alias; use `prod` for the dev→staging→prod line, and don't deploy both `demo`
+  # and `prod` into the same workspace (they would collide on branch + app name).
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      lakebase_branch: production
+      sql_warehouse_id: ${resources.sql_warehouses.app_sql_warehouse.id}
+    resources:
+      sql_warehouses:
+        app_sql_warehouse: *app_sql_warehouse
 
   # Restricted workspaces where the deployer CANNOT create a SQL warehouse (no warehouse-create
   # entitlement). Omits the `app_sql_warehouse` resource entirely, so you MUST pass an existing

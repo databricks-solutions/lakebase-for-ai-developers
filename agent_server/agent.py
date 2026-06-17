@@ -281,7 +281,10 @@ async def stream_handler(
     request: ResponsesAgentRequest,
 ) -> AsyncGenerator[ResponsesAgentStreamEvent, None]:
     thread_id = _get_thread_id(request)
-    mlflow.update_current_trace(metadata={"mlflow.trace.session": thread_id})
+    mlflow.update_current_trace(
+        metadata={"mlflow.trace.session": thread_id},
+        tags={"environment": settings.app_env},
+    )
 
     user_id = _get_user_id(request)
     if not user_id:
@@ -345,6 +348,10 @@ async def stream_handler(
 @invoke()
 async def invoke_handler(request: ResponsesAgentRequest) -> ResponsesAgentResponse:
     thread_id = _get_thread_id(request)
+    mlflow.update_current_trace(
+        metadata={"mlflow.trace.session": thread_id},
+        tags={"environment": settings.app_env},
+    )
     user_id = _get_user_id(request)
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
     if user_id:

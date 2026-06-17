@@ -44,6 +44,13 @@ class Settings(BaseModel):
     # --- Auth (local only; ignored on Databricks) ---
     databricks_profile: str | None = Field(default=None, alias="DATABRICKS_CONFIG_PROFILE")
 
+    # --- Deployment environment ---
+    # Set by the DABs bundle to ${bundle.target} (dev/staging/prod/demo/byo) and injected as APP_ENV
+    # (databricks.yml). The bundle target is otherwise invisible to the running app — surfacing it
+    # lets us stamp traces/logs with the environment so dev/staging/prod traffic is separable in
+    # observability. Defaults to "local" for IDE runs where APP_ENV is unset. See docs/state-lifecycle.md.
+    app_env: str = Field(default="local", alias="APP_ENV")
+
     # --- Unity Catalog ---
     uc_catalog: str = Field(default="supply_chain", alias="UC_CATALOG")
     uc_schema: str = Field(default="planner", alias="UC_SCHEMA")
