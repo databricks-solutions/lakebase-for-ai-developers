@@ -156,6 +156,30 @@ If you registered the Lakebase database as a UC catalog via CLI and it failed, r
 UI (*Catalog Explorer → Create catalog → from a Lakebase database*) — the autoscaling
 `create-catalog` CLI path has a known body-stripping bug.
 
+## Troubleshooting (first deploy on a Databricks laptop)
+
+Full table in [`DEPLOYMENT_GUIDE.md` §8](DEPLOYMENT_GUIDE.md#8-troubleshooting). The ones that bite
+almost everyone on the first run:
+
+- **`uv` can't reach PyPI** (`Connection refused (os error 61)` / `Failed to fetch https://pypi.org/...`).
+  Corp laptops block public PyPI in a **Jamf-managed `/etc/hosts`** — don't edit it (it's reverted +
+  it's an IT control). Use the internal proxy: `export UV_INDEX_URL=https://pypi-proxy.cloud.databricks.com/simple`
+  in the same shell as `make deploy`.
+- **`Cluster id or serverless are required but were not specified`** — the local table-creation step
+  uses Databricks Connect. Add `serverless_compute_id = auto` to your `[<profile>]` in `~/.databrickscfg`.
+- **`Genie Space resources are only supported with direct deployment mode`** — the workspace has old
+  Terraform-engine state. Migrate once: `databricks bundle deployment migrate -t <target> -p <p>
+  --noplancheck` → `databricks bundle plan …` (app must be **UPDATE**, never recreate) → `make deploy`.
+  If migrate fails with `missing entry in state` and the app **never deployed**, clean-slate (delete the
+  app/job + the remote & local `terraform.tfstate`, then redeploy). Never clean-slate an app that has run.
+- **`lineage mismatch in state files`** — you're reusing a target name (e.g. `dev`) across two
+  workspaces, or deploying from a stale/duplicate copy of the repo. Run from the bundle root and
+  `rm -rf .databricks/bundle/<target>` to re-pull the right remote state.
+- **End-of-deploy `⚠ Degraded … seed`/`verify` warnings are usually cosmetic** — the seed-job poll can
+  time out while the job runs on (check the Run URL), and `verify_deploy.py` probes the *default*
+  `lakebase_project` name so it "fails" when you passed `--var lakebase_project=…` even though the app
+  is bound correctly. The core app is up either way.
+
 ## Verify
 
 ```bash

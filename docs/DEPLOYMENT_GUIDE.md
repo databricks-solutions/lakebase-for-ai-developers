@@ -298,6 +298,25 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 
 ## 8. Troubleshooting
 
+> **First deploy from a Databricks-managed (corp) laptop? Set these two up front** — they bite every
+> new deployer, aren't workspace-specific, and aren't obvious from the error text:
+>
+> 1. **Public PyPI is blocked.** Corp laptops blackhole `pypi.org` (and many mirrors) to `127.0.0.1`
+>    in a **Jamf-managed `/etc/hosts`** block (`# Managed by Jamf, sourced from Git. DO NOT REMOVE`).
+>    Symptom: `uv` / `make deploy` fail with `Connection refused (os error 61)` or
+>    `Failed to fetch https://pypi.org/simple/...`. **Do not edit `/etc/hosts`** — it's an IT security
+>    control and Jamf reverts it on the next sync. Point `uv`/`pip` at the sanctioned internal proxy
+>    instead (no system change needed):
+>    ```bash
+>    export UV_INDEX_URL=https://pypi-proxy.cloud.databricks.com/simple   # in the same shell as make deploy
+>    ```
+>    `make deploy` runs `uv` in subprocesses, so they inherit the exported var. (`files.pythonhosted.org`
+>    is *not* blocked, so wheels download fine once the index host resolves.)
+> 2. **Databricks Connect needs a compute target.** The local "create operational schema + empty
+>    tables" step (phase 3) runs via Databricks Connect; without a target it fails with
+>    `Exception: Cluster id or serverless are required but were not specified`. Add
+>    `serverless_compute_id = auto` under your `[<profile>]` block in `~/.databrickscfg`.
+
 | Symptom | Cause / fix |
 |---|---|
 | `/ui` returns "SPA not built" | `frontend/dist` wasn't shipped. Run `make deploy` (it builds first), not a raw `bundle deploy`. |
@@ -317,6 +336,10 @@ the operational schema the agent expects (see [`data/genie/genie_config.py`](../
 | "Inspect backend" / chat shows a **502** (raw HTML) right after deploy | Cold start — the worker is still warming behind the proxy (`/api/*` is briefly unavailable). The UI retries automatically; just wait ~15–30s and retry. Only a 502 that persists once the app is **warm** is a real error (check Apps UI → Logs). |
 | **No traces / 👍👎 in the experiment** (Traces tab + UC trace tables empty) | UC tracing isn't binding. The bundle default handles all three pieces — the warehouse (created), App SP `CAN USE` (the `trace-warehouse` app binding), and the `USE CATALOG` + trace-schema grants (seed's `grant_app_sp`). So this means one didn't apply: check app logs for `UC trace binding failed … PERMISSION_DENIED … USE CATALOG` (re-run `make seed`) or `UC tracing OFF: no SQL warehouse set` (BYO `--var sql_warehouse_id` empty). Fix, then **redeploy**. Non-fatal — the app still works. Also: the UC destination only binds to a **trace-free** experiment, so re-homing tracing needs a fresh experiment (bump the `planner_experiment_uc` resource **key**). |
 | Clicking a **historical chat** opens an empty panel | Either that chat predates this build (transcripts persist going forward only), or the store read failed (check logs). New chats persist + rehydrate automatically. |
+| `bundle deploy` fails: `Genie Space resources are only supported with direct deployment mode` | The bundle requires the **direct** engine (genie_spaces is direct-only), but the workspace has older **Terraform**-engine state, so the CLI sticks with Terraform. Migrate once per target: `databricks bundle deployment migrate -t <target> -p <p> --noplancheck` → `databricks bundle plan -t <target> -p <p>` (**gate:** app = UPDATE, never recreate) → `make deploy`. If migrate fails with `missing entry in state after deploy` (the current config drifted from the old state — e.g. a renamed experiment or an added warehouse), **and the app has never successfully deployed** (so its SP owns no Lakebase schemas), clean-slate instead: delete the app + seed job, delete the remote state (`/Workspace/Users/<you>/.bundle/<bundle>/<target>/state/terraform.tfstate`) and local state (`rm -rf .databricks/bundle/<target>/terraform`), then `make deploy`. **Never** clean-slate an app that *has* run — deleting it orphans the Lakebase schemas its SP owns (see [`lakebase-apps-permissions.md`](lakebase-apps-permissions.md)). |
+| `bundle deploy` fails: `lineage mismatch in state files` (local serial/lineage ≠ remote) | The local `.databricks/bundle/<target>/` state cache is keyed by **target name only** — deploying the same target (e.g. `dev`) to a **different workspace** collides with the first workspace's cached state. Also confirm you're running from the **bundle root** (where `databricks.yml` lives), not a parent directory or a stale duplicate copy of the repo. Fix: `rm -rf .databricks/bundle/<target>` to re-pull the correct remote state, then deploy. |
+| `make deploy` ends with `⚠ Degraded … seed` but the job is still running | Cosmetic on restricted networks: the CLI's job-status poll timed out (`read tcp … operation timed out`) while the seed job keeps running **server-side**. Open the Run URL and check the tasks before re-seeding — `build_vs_index` (the Vector Search index) is the long pole and finishes async. Don't blindly `make seed` again. |
+| `make deploy` verify reports `FAIL could not connect to Lakebase: Project '…' not found` but the app works | Cosmetic: `verify_deploy.py` checks the **default** `lakebase_project` name, so if you passed `--var lakebase_project=<other>` it probes the wrong project. The app itself is correctly bound to the project you passed — confirm with `databricks apps get <app>` → `resources[].postgres.database`. (Verify passes cleanly when you use the default project.) |
 
 ---
 
