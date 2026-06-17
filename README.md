@@ -98,6 +98,18 @@ make redeploy-ui PROFILE=<p>              # FAST: frontend change → build + de
 **workspace admin** on the target workspace and a **writable UC catalog**. The Lakebase project,
 Genie space, and seed are all handled by the deploy — no manual setup steps.
 
+> **On a Databricks-managed (corp) laptop, two env gotchas bite the first deploy** — neither is
+> obvious from the error text (full list: [`docs/DEPLOYMENT_GUIDE.md` §8](docs/DEPLOYMENT_GUIDE.md#8-troubleshooting)):
+> 1. **Public PyPI is blocked** (Jamf-managed `/etc/hosts` — don't edit it). If `uv`/`make deploy`
+>    fail with `Connection refused (os error 61)`, point uv at the internal proxy first:
+>    `export UV_INDEX_URL=https://pypi-proxy.cloud.databricks.com/simple`.
+> 2. **Databricks Connect needs compute.** If you hit `Cluster id or serverless are required`, add
+>    `serverless_compute_id = auto` to your `[<profile>]` in `~/.databrickscfg`.
+>
+> Hitting `Genie Space resources are only supported with direct deployment mode` or
+> `lineage mismatch in state files` on a workspace you've deployed to before? Those are the
+> Terraform→direct engine migration and stale-state-cache cases — see the troubleshooting guide.
+
 ### Which deploy fits your access
 
 The right command depends on what you're allowed to create on the workspace:
