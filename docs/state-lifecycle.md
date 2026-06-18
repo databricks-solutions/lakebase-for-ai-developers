@@ -142,3 +142,105 @@ make deploy PROFILE=<p> TARGET=dev --var lakebase_branch=dev-<you>
 make deploy PROFILE=<p> TARGET=dev --var lakebase_agent_memory_schema=dev_<you>_memory \
                                    --var lakebase_writeback_schema=dev_<you>_app
 ```
+
+## A worked example: changing the approval gate on `dev`
+
+To make the lifecycle tangible, here's an end-to-end change against the **`dev` target**. Say Priya
+wants to **lower the approval gate** so any PO reschedule over **$50k** (down from $100k) trips
+human-in-the-loop, and to **teach the agent a new long-term preference** ("for part `BRK-204`, prefer
+alternate supplier `Acme-West`"). Both touch durable state — the gate's decision is traced through the
+checkpointer, and the preference is written to the semantic store — so this is exactly the kind of
+change the branch-per-environment model is meant to isolate.
+
+### 1. First `dev` deploy forks prod-shaped state for free
+
+The first time Priya runs:
+
+```bash
+make deploy PROFILE=<p> TARGET=dev        # TARGET defaults to dev anyway
+```
+
+`deploy.sh` Phase 1 (`ensure_lakebase_project.py`) sees the `development` branch is missing and **forks
+it from `production` copy-on-write** — instant and free. She immediately has a **prod-shaped snapshot**
+of the operational `public` tables (inventory, open POs, suppliers) to test against, without copying a
+byte. Her agent-state schemas `dev_memory` / `dev_app` are **created fresh and owned by the dev app
+SP** on first boot (the inherited canonical `supply_chain_planner_*` schemas come along on the fork but
+stay prod-owned and unused — see "Why agent-state schema names differ per tier"). The seed job is only
+needed for a from-scratch project; on a forked dev branch the data is already there.
+
+### 2. Inner loop: iterate locally first
+
+Before touching the shared `dev` branch, Priya iterates locally against the **same `development`
+branch but with her own schemas**, so a local run can't corrupt shared dev state:
+
+```
+LAKEBASE_AUTOSCALING_BRANCH=development
+LAKEBASE_AGENT_MEMORY_SCHEMA=dev_priya_memory
+LAKEBASE_WRITEBACK_SCHEMA=dev_priya_app
+```
+
+She edits the gate threshold in `agent_server`, runs the two processes (FastAPI `:8000` + Vite
+`:5173`), and asks the agent to *"reschedule PO-4471 for part BRK-204."* The gate now trips at $50k and
+the agent pauses on an `interrupt()` approval card; after she approves, the alternate-supplier
+preference lands in `dev_priya_memory`. Traces are stamped `environment=local`. The new DDL for any
+added store table is created by the `ensure_*` startup functions (`CREATE … IF NOT EXISTS`), so there's
+no migration step — booting the app is the migration.
+
+### 3. Push to the shared `dev` target
+
+Happy with it locally, Priya promotes the **code** (not the data) to the shared dev app:
+
+```bash
+make redeploy PROFILE=<p> TARGET=dev      # app-only: bundle deploy + restart, ~30–60s
+```
+
+This deploys to the user-prefixed dev app (`{user}-supply-chain-planner`), reading and writing the
+shared `development` branch with the `dev_memory` / `dev_app` schemas. Every run is stamped
+`APP_ENV=dev` → `environment=dev` on its MLflow trace, so her dev traffic is cleanly separable from
+staging and prod in observability. (Background-response mode degrades on non-prod tiers because its
+`agent_server` schema is hard-coded and prod-owned — fine for a dev loop; normal invoke/stream, memory,
+and write-back all work.)
+
+### 4. Avoid collisions with a teammate on `dev`
+
+If someone else is also iterating on the shared `development` branch and Priya wants her experiments
+isolated, she takes her own branch (forked from prod) or her own schema on the shared branch:
+
+```bash
+make deploy PROFILE=<p> TARGET=dev --var lakebase_branch=dev-priya
+# or keep the shared branch but isolate just the agent state:
+make deploy PROFILE=<p> TARGET=dev --var lakebase_agent_memory_schema=dev_priya_memory \
+                                   --var lakebase_writeback_schema=dev_priya_app
+```
+
+### 5. Reset when test state gets messy
+
+After a dozen approve/reject runs the dev memory is full of throwaway approvals and preferences. Since
+**data flows down, never up**, Priya just re-forks `development` from `production` to get a clean
+prod-shaped slate back — instant, free, no merge. (Scheduled reset-from-prod is on the roadmap; today
+it's a manual re-fork.) Nothing of value is lost: lower branches are disposable by design.
+
+### 6. Promote up to staging, then prod
+
+Once the change is solid, it moves **up the tiers as code + idempotent DDL** — never by pushing dev
+data anywhere:
+
+```bash
+make deploy PROFILE=<p> TARGET=staging    # → staging branch, staging_memory / staging_app
+# validate on prod-shaped staging data, then:
+make deploy PROFILE=<p> TARGET=prod       # → production branch, canonical schemas
+```
+
+Each tier forks its own branch from `production` if missing and creates its own tier-named schemas on
+first boot. Priya's **$50k threshold change ships as code**; the **alternate-supplier preferences she
+created on dev do not follow it** — canonical long-term memory lives on `production` and is only
+enriched upward later by the planned distillation job.
+
+### What moved, and what didn't
+
+| Thing | dev → staging → prod? | How |
+|-------|----------------------|-----|
+| Gate-threshold code change | ✅ up | DABs deploy (`make deploy TARGET=…`) |
+| New store-table DDL | ✅ up | `ensure_*` startup functions (`CREATE … IF NOT EXISTS`) |
+| Operational data (inventory/POs) | ⬇️ down only | copy-on-write fork from `production` |
+| Test approvals & preferences from dev | ⛔ neither | thrown away on reset; curated rows promoted later via distillation (planned) |
