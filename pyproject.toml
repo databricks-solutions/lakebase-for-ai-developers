@@ -65,7 +65,7 @@ agent-evaluate = "agent_server.evaluation.cli:main"
 [dependency-groups]
 dev = [
     "hatchling>=1.28.0",
-    "pytest>=9.0.2",
+    "pytest>=9.1.1",
     "pytest-xdist>=3.8.0",
     "ruff>=0.6.0",
     # Local Spark via Databricks Connect (get_spark() in data/_spark.py). DEV-ONLY: never install
