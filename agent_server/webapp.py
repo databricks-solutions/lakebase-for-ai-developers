@@ -146,6 +146,40 @@ def me(request: Request) -> dict[str, Any]:
 
 # ── Backend explorer — "peer into every component" ──────────────────────────────────────────
 
+@lru_cache(maxsize=1)
+def _lakebase_deep_links() -> tuple[str | None, str | None]:
+    """(project_link, pgvector_tables_link) for the configured Lakebase autoscaling project/branch.
+
+    The workspace UI addresses Lakebase projects/branches by an opaque `uid`
+    (e.g. `18362468-1896-4a5a-8981-67e8d8e60710` for a project, `br-sparkling-sky-d1x3gyj3` for a
+    branch) — NOT the human-readable name this app's config uses (`lakebase_autoscaling_project`/
+    `_branch`), so the link can't be built by string-interpolating config values alone. Resolve it
+    via the SDK: `WorkspaceClient().postgres.get_project(...)`/`get_branch(...)` both return that
+    exact `uid` field. Cached (each call is a live API round-trip); returns (None, None) on any
+    failure (autoscaling not configured, older single-instance Lakebase model, transient
+    permission/lookup issue) so the explorer UI falls back to the generic listing page rather than
+    a broken link.
+    """
+    host = _workspace_host()
+    project = settings.lakebase_autoscaling_project
+    branch = settings.lakebase_autoscaling_branch
+    if not (host and project):
+        return None, None
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        w = WorkspaceClient()
+        project_uid = w.postgres.get_project(name=f"projects/{project}").uid
+        project_link = f"{host}/lakebase/projects/{project_uid}"
+        pgvector_link = project_link
+        if branch:
+            branch_uid = w.postgres.get_branch(name=f"projects/{project}/branches/{branch}").uid
+            pgvector_link = f"{project_link}/branches/{branch_uid}/tables"
+        return project_link, pgvector_link
+    except Exception:  # noqa: BLE001 — best-effort deep link, never break the explorer panel
+        return None, None
+
+
 def _resource_cards() -> list[dict[str, Any]]:
     """Static-ish metadata + deep links for each backend piece. Live peeks are separate routes."""
     host = _workspace_host()
@@ -153,6 +187,14 @@ def _resource_cards() -> list[dict[str, Any]]:
     proj = settings.lakebase_autoscaling_project
     branch = settings.lakebase_autoscaling_branch
     cards: list[dict[str, Any]] = []
+
+    # Prefer a real, project/branch-scoped deep link (resolved via the SDK — see
+    # _lakebase_deep_links); fall back to the generic instances-listing page (which is at least
+    # confirmed to load) if resolution fails for any reason.
+    generic_lakebase_link = f"{host}/compute/database-instances" if host else None
+    project_link, pgvector_tables_link = _lakebase_deep_links()
+    lakebase_link = project_link or generic_lakebase_link
+    pgvector_link = pgvector_tables_link or generic_lakebase_link
 
     # 1 — Lakebase (autoscaling Postgres: agent memory + operational pgvector live here)
     cards.append({
@@ -167,7 +209,7 @@ def _resource_cards() -> list[dict[str, Any]]:
             "memory schema": settings.lakebase_memory_schema,
             "operational schema": settings.lakebase_operational_schema,
         },
-        "link": f"{host}/compute/database-instances" if host else None,
+        "link": lakebase_link,
         "link_label": "Open Lakebase",
     })
     # 2 — pgvector operational table (the hybrid-query differentiator)
@@ -182,17 +224,26 @@ def _resource_cards() -> list[dict[str, Any]]:
             "embedding": settings.embedding_endpoint,
         },
         "peek": "/api/explorer/pgvector",
-        "link": f"{host}/compute/database-instances" if host else None,
+        "link": pgvector_link,
         "link_label": "Open in Lakebase",
     })
     # 3 — MLflow experiment (the trace of every run)
     exp = settings.mlflow_experiment_id
+    from agent_server.agent import _TRACING_DEGRADED, _TRACING_STATUS  # lazy: avoid import cycle
+    experiment_facts: dict[str, str] = {"experiment_id": exp or "(auto per-user)"}
+    if _TRACING_DEGRADED:
+        experiment_facts["tracing"] = "⚠ degraded — see app logs"
+        if _TRACING_STATUS:
+            status = _TRACING_STATUS
+            experiment_facts["tracing issue"] = status[:180] + ("…" if len(status) > 180 else "")
+    else:
+        experiment_facts["tracing"] = "ok"
     cards.append({
         "key": "experiment",
         "title": "MLflow Experiment",
         "subtitle": "Every run is one trace — routing, retrieval, planner, gate, HITL",
         "accent": "blue",
-        "facts": {"experiment_id": exp or "(auto per-user)"},
+        "facts": experiment_facts,
         "link": (f"{host}/ml/experiments/{exp}" if (host and exp) else (f"{host}/ml/experiments" if host else None)),
         "link_label": "Open experiment",
     })

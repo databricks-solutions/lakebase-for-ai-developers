@@ -13,16 +13,23 @@ What now handles WHAT:
   startup with no manual setup. (That's why this task no longer registers a role or grants
   CREATE-on-database — the prior versions did, before the resource existed.)
 
-This task does the two things those resource bindings canNOT — **object-level data grants on
-securables the SP doesn't own**:
+This task does the things resource bindings + the declarative bundle resources canNOT —
+**object-level data grants on securables the SP doesn't own**:
 - **Lakebase: USAGE + SELECT on the operational (`public`) synced tables.** Owned by the platform's
   `databricks_writer_*` role, not the SP, so CONNECT+CREATE never reaches them.
-- **Unity Catalog: USE CATALOG + USE SCHEMA/CREATE TABLE/MODIFY/SELECT on the MLflow trace schema**
-  (`<trace_catalog>.<mlflow_trace_schema>`). The `experiment` app resource grants CAN_MANAGE on the
-  experiment *object* (a workspace ACL), but MLflow 3 UC tracing writes spans as rows in a UC Delta
-  table — a separate governance plane CAN_MANAGE doesn't reach. Without this the app's UC trace bind
-  fails PERMISSION_DENIED and silently falls back to artifact-storage tracing, which is egress-blocked
-  on Apps → traces land with **no span data**.
+- **Unity Catalog: USE CATALOG on the trace catalog** (`<trace_catalog>`). The `experiment` app
+  resource grants CAN_MANAGE on the experiment *object* (a workspace ACL), but MLflow 3 UC tracing
+  writes spans as rows in a UC Delta table — a separate governance plane CAN_MANAGE doesn't reach.
+  Without this the app's UC trace bind fails PERMISSION_DENIED and silently falls back to
+  artifact-storage tracing, which is egress-blocked on Apps → traces land with **no span data**.
+  (The SCHEMA-level grant — USE SCHEMA/CREATE TABLE/MODIFY/SELECT on
+  `<trace_catalog>.<mlflow_trace_schema>` — moved to a declarative
+  `resources.schemas.mlflow_trace_schema` bundle resource in databricks.yml, created + granted in
+  the SAME `bundle deploy` as the app. It's not repeated here. The catalog-level grant stays here
+  deliberately: declaring the (likely shared, multi-tenant) trace catalog itself as a
+  `resources.catalogs` bundle resource would make DABs try to own that catalog's whole lifecycle,
+  which is unsafe on a pre-existing catalog other teams also use — DABs has no supported "adopt
+  existing, grant-only" mode for catalogs.)
 
 Both need an explicit GRANT run by an admin/superuser (the deployer). Hence this stays a seed task.
 
@@ -80,15 +87,15 @@ def _resolve_app_sp(w, app_name: str) -> str | None:
     return sp
 
 
-def _grant_uc_trace_writes(sp: str) -> None:
-    """Grant the App SP the Unity Catalog privileges MLflow 3 UC tracing needs to create + write the
-    trace Delta tables. Runs on the serverless Spark session as the deployer (a UC admin on the
-    catalog), the same idiom as 00_bootstrap_schemas.py — so no SQL warehouse id is needed here.
-    Catalog/schema come from config (mirrors the bootstrap defaults); the SP is the resolved app
-    client id. Idempotent (re-GRANT is a no-op) and best-effort: a UC hiccup logs loudly but does
-    not fail the seed, so the operational grants below still run."""
+def _grant_uc_trace_catalog(sp: str) -> None:
+    """Grant the App SP USE CATALOG on the trace catalog — the one UC privilege MLflow 3 UC tracing
+    needs that can't safely be made declarative (see module docstring: the catalog is typically
+    shared/multi-tenant, so it isn't a bundle-managed resource). The SCHEMA-level grant is handled
+    by databricks.yml's resources.schemas.mlflow_trace_schema instead. Runs on the serverless Spark
+    session as the deployer (a UC admin on the catalog), the same idiom as 00_bootstrap_schemas.py —
+    so no SQL warehouse id is needed here. Idempotent (re-GRANT is a no-op) and best-effort: a UC
+    hiccup logs loudly but does not fail the seed, so the operational grants below still run."""
     catalog = settings.mlflow_trace_catalog or settings.uc_catalog
-    schema = settings.mlflow_trace_schema or "mlflow_traces"
     if not catalog:
         print("  ! skipping UC trace grant: no MLFLOW_TRACE_CATALOG / UC_CATALOG configured")
         return
@@ -98,17 +105,13 @@ def _grant_uc_trace_writes(sp: str) -> None:
     spark = get_spark()
     # Service principals are referenced by their application (client) id, backtick-quoted, in UC
     # GRANTs — same identity the Lakebase Postgres role is named after.
-    stmts = [
-        f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{sp}`",
-        f"GRANT USE SCHEMA, CREATE TABLE, MODIFY, SELECT ON SCHEMA `{catalog}`.`{schema}` TO `{sp}`",
-    ]
-    print(f"UC trace grant: {catalog}.{schema} → SP {sp}")
-    for s in stmts:
-        try:
-            spark.sql(s)
-            print(f"  ✓ {s}")
-        except Exception as exc:  # don't let a UC permission hiccup block the operational grant
-            print(f"  ! UC trace grant failed (traces may fall back to artifact storage): {exc}")
+    stmt = f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{sp}`"
+    print(f"UC trace catalog grant: {catalog} → SP {sp}")
+    try:
+        spark.sql(stmt)
+        print(f"  ✓ {stmt}")
+    except Exception as exc:  # don't let a UC permission hiccup block the operational grant
+        print(f"  ! UC trace catalog grant failed (traces may fall back to artifact storage): {exc}")
 
 
 def main() -> None:
@@ -126,9 +129,10 @@ def main() -> None:
     print(f"App           : {app_name}")
     print(f"App SP        : {sp}\n")
 
-    # 1) Unity Catalog: trace-table writes for MLflow 3 UC tracing. Independent of Lakebase — runs
-    #    whenever a trace catalog is configured.
-    _grant_uc_trace_writes(sp)
+    # 1) Unity Catalog: USE CATALOG for MLflow 3 UC tracing. Independent of Lakebase — runs
+    #    whenever a trace catalog is configured. (Schema-level grant is declarative — see
+    #    databricks.yml's resources.schemas.mlflow_trace_schema.)
+    _grant_uc_trace_catalog(sp)
 
     # 2) Lakebase: operational synced-table reads. Needs the autoscaling coords.
     project = settings.lakebase_autoscaling_project

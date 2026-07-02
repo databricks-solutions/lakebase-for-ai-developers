@@ -51,6 +51,24 @@ logging.getLogger("mlflow.utils.autologging_utils").setLevel(logging.ERROR)
 # frontend has no MLFLOW_EXPERIMENT_ID; the experiment is resolved per-user at runtime).
 _EXPERIMENT_ID: str | None = None
 
+# Set whenever tracing didn't fully wire up (schema/prefix collision, missing grant, no warehouse,
+# unsupported mlflow version, ...) so webapp._resource_cards() can tell the user WHY traces are
+# missing instead of showing a bare experiment id with no signal of trouble. Previously these
+# failures only reached a `logger.warning` — invisible unless someone was already reading app logs.
+_TRACING_DEGRADED: bool = False
+_TRACING_STATUS: str | None = None
+
+
+def _mark_tracing_degraded(message: str, exc: Exception | None = None) -> None:
+    """Loud (ERROR, not warning) + sticky: records the reason so the explorer UI can surface it."""
+    global _TRACING_DEGRADED, _TRACING_STATUS
+    _TRACING_DEGRADED = True
+    _TRACING_STATUS = message
+    if exc is not None:
+        logger.error("%s: %s", message, exc)
+    else:
+        logger.error(message)
+
 
 def _export_local_trace_credentials() -> None:
     """Local U2M wrinkle: MLflow's async trace exporter doesn't resolve OAuth-profile creds, so
@@ -96,14 +114,20 @@ def _setup_mlflow_experiment() -> None:
                 )
                 os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = wh
             except Exception as exc:  # mlflow < 3.11, or location unsupported
-                logger.warning("UC trace location unavailable; default tracing: %s", exc)
+                _mark_tracing_degraded(
+                    "MLflow UC trace location unavailable (mlflow<3.11 or unsupported) — falling "
+                    "back to plain experiment tracing, which does not record on Databricks Apps "
+                    "(egress-blocked)", exc,
+                )
                 trace_location = None
         else:
             # Clear the sentinel/blank the bundle may have set so MLflow never sees a bogus id.
             os.environ.pop("MLFLOW_TRACING_SQL_WAREHOUSE_ID", None)
             if cat and sch:
-                logger.warning("MLflow UC tracing OFF: no SQL warehouse set (sql_warehouse_id). "
-                               "Traces (and 👍/👎 feedback) won't record on Apps until you set one.")
+                _mark_tracing_degraded(
+                    "MLflow UC tracing OFF: no SQL warehouse set (sql_warehouse_id). Traces (and "
+                    "👍/👎 feedback) won't record on Apps until you set one."
+                )
 
         if settings.mlflow_experiment_id:
             # Bind to the explicitly-configured (shared project) experiment. Attaching a UC trace
@@ -114,10 +138,16 @@ def _setup_mlflow_experiment() -> None:
                     exp = mlflow.get_experiment(settings.mlflow_experiment_id)
                     resolved = mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
                 except Exception as exc:  # e.g. app SP lacks USE CATALOG on the trace catalog
-                    logger.warning(
-                        "UC trace binding failed (%s); falling back to plain experiment tracing. "
-                        "Grant the App SP USE CATALOG on %s + USE SCHEMA/CREATE TABLE/MODIFY on "
-                        "%s.%s to enable UC traces.", exc, cat, cat, sch,
+                    _mark_tracing_degraded(
+                        f"UC trace binding failed for {cat}.{sch} (prefix="
+                        f"{settings.mlflow_trace_table_prefix}); falling back to plain experiment "
+                        "tracing (doesn't record on Apps). If the error mentions "
+                        "INSUFFICIENT_PERMISSIONS / 'owner of one of the underlying resources "
+                        "failed an authorization check', this is almost always a STALE trace "
+                        "schema/prefix left by a DIFFERENT prior deployment on this shared catalog "
+                        "— redeploy with a unique --mlflow-trace-schema <name>. Otherwise grant the "
+                        f"App SP USE CATALOG on {cat} + USE SCHEMA/CREATE TABLE/MODIFY on {cat}.{sch}.",
+                        exc,
                     )
                     trace_location = None
                     resolved = mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
@@ -140,7 +170,7 @@ def _setup_mlflow_experiment() -> None:
                         cat, sch, settings.mlflow_trace_table_prefix,
                         settings.mlflow_experiment_id or "/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
-        logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
+        _mark_tracing_degraded("Could not set MLflow experiment; traces may not be recorded", exc)
 
 
 def _trace_url(trace_id: str | None) -> str | None:
