@@ -105,7 +105,7 @@ def main() -> None:
     # Metadata sidecar — the document_metadata.json with Q&A pairs / customer / supplier.
     meta = src / "document_metadata.json"
     if meta.exists():
-        print(f"  → document_metadata.json")
+        print("  → document_metadata.json")
         _upload(w, meta, "document_metadata.json")
 
     print(f"\nDone. {len(pairs)} PDFs at {settings.volume_uri}")

@@ -138,7 +138,7 @@ def _setup_mlflow_experiment() -> None:
         if trace_location is not None:
             logger.info("MLflow UC tracing → %s.%s (prefix=%s) on experiment %s",
                         cat, sch, settings.mlflow_trace_table_prefix,
-                        settings.mlflow_experiment_id or f"/Users/.../supply-chain-planner-uc")
+                        settings.mlflow_experiment_id or "/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
         logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
 

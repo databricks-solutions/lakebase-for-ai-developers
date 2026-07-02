@@ -53,7 +53,7 @@ variables:
   # --- Unity Catalog: the Genie/operational Delta source + the Knowledge volume & VS index. ---
   uc_catalog:
     description: Catalog holding the operational Delta tables, Knowledge volume, VS index, and trace schema. Must already exist and be writable by the deployer.
-    default: serverless_stable_yau46e_catalog
+    default: main
   uc_schema:
     description: Schema (within uc_catalog) for the operational Delta tables + Knowledge corpus.
     default: planner
@@ -94,10 +94,20 @@ variables:
   lakebase_writeback_schema:
     description: Schema for the Meridian write-back tables. Canonical on prod; tier-named on dev/staging.
     default: supply_chain_planner_app
-  # NOTE: the operational synced tables live in uc_catalog (schema `public`), NOT a separate
-  # Lakebase-registered catalog — the synced-table spec carries its own branch + postgres_database,
-  # so a plain writable catalog works and the bundle creates the `public` schema in it. One catalog
-  # var to set (uc_catalog); LAKEBASE_UC_CATALOG below follows it.
+  # NOTE: the operational synced tables live in uc_catalog (schema `lakebase_operational_schema`),
+  # NOT a separate Lakebase-registered catalog — the synced-table spec carries its own branch +
+  # postgres_database, so a plain writable catalog works and the bundle creates the schema in it.
+  # One catalog var to set (uc_catalog); LAKEBASE_UC_CATALOG below follows it.
+  lakebase_operational_schema:
+    # Default "public" collides on multi-tenant workspaces where uc_catalog is a shared catalog
+    # (e.g. `main`) that some OTHER project already synced tables of the same name into — Synced
+    # Tables are namespaced by catalog.schema.table, and a stale/orphaned registration under
+    # catalog.public.<table> (pointing at a project that no longer exists) blocks a fresh
+    # create-synced-table at that same name with "Table already exists pointing to a different
+    # project". Override to a schema unique to this deployment (e.g. --var
+    # lakebase_operational_schema=supply_chain_planner) when uc_catalog isn't exclusively yours.
+    description: Postgres schema (within the Lakebase project) for the synced operational tables + native pgvector table. Must be unique per Lakebase project if uc_catalog is shared.
+    default: public
 
   # --- Analytics (Genie) — created + bound declaratively via resources.genie_spaces below. ---
   # No genie_space_id var: DABs creates the space (from data/genie/supply_chain.geniespace.json) and
@@ -253,7 +263,7 @@ resources:
           - name: LAKEBASE_WRITEBACK_SCHEMA
             value: ${var.lakebase_writeback_schema}
           - name: LAKEBASE_OPERATIONAL_SCHEMA
-            value: "public"
+            value: ${var.lakebase_operational_schema}
           - name: LAKEBASE_UC_CATALOG
             value: ${var.uc_catalog}
 
@@ -348,7 +358,7 @@ resources:
             python_file: ./data/_seed_task.py
             parameters:
               - data/00_bootstrap_schemas.py
-              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"public","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","DATABRICKS_WAREHOUSE_ID":"${var.sql_warehouse_id}","APP_NAME":"${var.app_name}"}'
+              - &seed_cfg '{"UC_CATALOG":"${var.uc_catalog}","UC_SCHEMA":"${var.uc_schema}","UC_VOLUME":"documents","LAKEBASE_AUTOSCALING_PROJECT":"${var.lakebase_project}","LAKEBASE_AUTOSCALING_BRANCH":"${var.lakebase_branch}","LAKEBASE_AUTOSCALING_ENDPOINT":"${var.lakebase_endpoint}","LAKEBASE_DATABASE":"${var.lakebase_database}","LAKEBASE_OPERATIONAL_SCHEMA":"${var.lakebase_operational_schema}","LAKEBASE_UC_CATALOG":"${var.uc_catalog}","DATABRICKS_EMBEDDING_ENDPOINT":"${var.embedding_endpoint}","VECTOR_SEARCH_ENDPOINT":"${var.vector_search_endpoint}","MLFLOW_TRACE_CATALOG":"${var.uc_catalog}","MLFLOW_TRACE_SCHEMA":"${var.mlflow_trace_schema}","DATABRICKS_WAREHOUSE_ID":"${var.sql_warehouse_id}","APP_NAME":"${var.app_name}"}'
           environment_key: seed
 
         # --- Operational chain → Lakebase ---

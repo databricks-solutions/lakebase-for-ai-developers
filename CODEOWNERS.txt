@@ -1,0 +1,9 @@
+# Maintainers for this repository.
+#
+# NOTE: GitHub only auto-requests these reviewers on pull requests if this file is named exactly
+# `CODEOWNERS` (in the repo root, docs/, or .github/) — see
+# https://docs.github.com/articles/about-codeowners. It's kept as CODEOWNERS.txt here as a plain,
+# human-readable maintainer declaration; rename or duplicate it if you also want GitHub's
+# automatic review-request behavior.
+
+* @alexmillerdb @kylie-taylor_data

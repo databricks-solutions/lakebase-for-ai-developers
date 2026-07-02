@@ -22,7 +22,7 @@ governance is the user's. The agent itself + Lakebase use the app service princi
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional

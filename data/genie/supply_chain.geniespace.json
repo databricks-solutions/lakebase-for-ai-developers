@@ -45,31 +45,31 @@
         "description": [
           "Current on-hand stock per SKU per location. Columns: sku, location, on_hand_qty, last_updated. Use MAX(last_updated) per (sku, location) for the current snapshot."
         ],
-        "identifier": "serverless_stable_yau46e_catalog.planner.inventory"
+        "identifier": "main.planner.inventory"
       },
       {
         "description": [
           "SKU master. Columns: sku (PK), name, category, list_price. Join key for inventory and purchase_orders."
         ],
-        "identifier": "serverless_stable_yau46e_catalog.planner.product_dim"
+        "identifier": "main.planner.product_dim"
       },
       {
         "description": [
           "Open and historical POs. Columns: po_id (PK), supplier_id, sku, qty, expected_date, status (one of: open, in_transit, delivered, cancelled). Filter status != 'cancelled' for fulfillment math unless asked otherwise."
         ],
-        "identifier": "serverless_stable_yau46e_catalog.planner.purchase_orders"
+        "identifier": "main.planner.purchase_orders"
       },
       {
         "description": [
           "Rolling supplier risk + on-time score. Columns: supplier_id, status (one of: healthy, watch, at_risk), risk_score (0-100), last_updated. Use MAX(last_updated) per supplier_id for current state."
         ],
-        "identifier": "serverless_stable_yau46e_catalog.planner.supplier_status"
+        "identifier": "main.planner.supplier_status"
       },
       {
         "description": [
           "Master data for upstream suppliers. Columns: supplier_id (PK), name, country, categories (comma-sep). Join key for purchase_orders and supplier_status."
         ],
-        "identifier": "serverless_stable_yau46e_catalog.planner.suppliers"
+        "identifier": "main.planner.suppliers"
       }
     ]
   },
@@ -81,7 +81,7 @@
           "Suppliers at risk, ranked by risk_score"
         ],
         "sql": [
-          "WITH latest AS (  SELECT supplier_id, status, risk_score,          ROW_NUMBER() OVER (PARTITION BY supplier_id ORDER BY last_updated DESC) rn   FROM serverless_stable_yau46e_catalog.planner.supplier_status) SELECT s.name, l.status, l.risk_score FROM latest l JOIN serverless_stable_yau46e_catalog.planner.suppliers s ON s.supplier_id = l.supplier_id WHERE l.rn = 1 AND l.status = 'at_risk' ORDER BY l.risk_score DESC"
+          "WITH latest AS (  SELECT supplier_id, status, risk_score,          ROW_NUMBER() OVER (PARTITION BY supplier_id ORDER BY last_updated DESC) rn   FROM main.planner.supplier_status) SELECT s.name, l.status, l.risk_score FROM latest l JOIN main.planner.suppliers s ON s.supplier_id = l.supplier_id WHERE l.rn = 1 AND l.status = 'at_risk' ORDER BY l.risk_score DESC"
         ]
       },
       {
@@ -90,7 +90,7 @@
           "Total open PO quantity by supplier for Q4"
         ],
         "sql": [
-          "SELECT s.name AS supplier, SUM(po.qty) AS open_qty FROM serverless_stable_yau46e_catalog.planner.purchase_orders po JOIN serverless_stable_yau46e_catalog.planner.suppliers s ON s.supplier_id = po.supplier_id WHERE po.status = 'open'   AND po.expected_date BETWEEN '2026-10-01' AND '2026-12-31' GROUP BY s.name ORDER BY open_qty DESC"
+          "SELECT s.name AS supplier, SUM(po.qty) AS open_qty FROM main.planner.purchase_orders po JOIN main.planner.suppliers s ON s.supplier_id = po.supplier_id WHERE po.status = 'open'   AND po.expected_date BETWEEN '2026-10-01' AND '2026-12-31' GROUP BY s.name ORDER BY open_qty DESC"
         ]
       },
       {
@@ -99,7 +99,7 @@
           "On-hand vs open POs for SKU 'SKU-1001'"
         ],
         "sql": [
-          "WITH inv_latest AS (  SELECT sku, location, on_hand_qty,          ROW_NUMBER() OVER (PARTITION BY sku, location ORDER BY last_updated DESC) rn   FROM serverless_stable_yau46e_catalog.planner.inventory WHERE sku = 'SKU-1001'), inv AS (  SELECT sku, SUM(on_hand_qty) AS on_hand FROM inv_latest WHERE rn = 1 GROUP BY sku), po AS (  SELECT sku, SUM(qty) AS open_po FROM serverless_stable_yau46e_catalog.planner.purchase_orders   WHERE sku = 'SKU-1001' AND status = 'open' GROUP BY sku) SELECT inv.sku, inv.on_hand, po.open_po, (po.open_po - inv.on_hand) AS gap FROM inv FULL OUTER JOIN po ON inv.sku = po.sku"
+          "WITH inv_latest AS (  SELECT sku, location, on_hand_qty,          ROW_NUMBER() OVER (PARTITION BY sku, location ORDER BY last_updated DESC) rn   FROM main.planner.inventory WHERE sku = 'SKU-1001'), inv AS (  SELECT sku, SUM(on_hand_qty) AS on_hand FROM inv_latest WHERE rn = 1 GROUP BY sku), po AS (  SELECT sku, SUM(qty) AS open_po FROM main.planner.purchase_orders   WHERE sku = 'SKU-1001' AND status = 'open' GROUP BY sku) SELECT inv.sku, inv.on_hand, po.open_po, (po.open_po - inv.on_hand) AS gap FROM inv FULL OUTER JOIN po ON inv.sku = po.sku"
         ]
       }
     ],

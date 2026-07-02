@@ -124,7 +124,7 @@ def main() -> None:
     _wait_until_online(w, index)
 
     print(f"\n✓ Index ready: {index}")
-    print(f"\nAdd to .env if not already set:")
+    print("\nAdd to .env if not already set:")
     print(f"  VECTOR_SEARCH_ENDPOINT={endpoint}")
     print(f"  VECTOR_SEARCH_INDEX={index}")
 

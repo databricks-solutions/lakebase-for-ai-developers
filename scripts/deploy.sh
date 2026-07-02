@@ -26,6 +26,11 @@
 #   --no-build-frontend          Skip the SPA build.
 #   --uc-catalog <name>          UC catalog for operational tables + Genie + traces (var uc_catalog).
 #   --uc-schema <name>           UC schema within the catalog (var uc_schema).
+#   --lakebase-operational-schema <name>  Postgres schema for the synced tables (var
+#                                lakebase_operational_schema, default "public"). Override to a name
+#                                unique to this deployment when uc_catalog is a shared/multi-tenant
+#                                catalog — avoids colliding with another project's synced tables of
+#                                the same name at catalog.public.<table>.
 #   --sql-warehouse-id <id>      Existing warehouse id (var sql_warehouse_id). REQUIRED for target byo.
 #   --genie-consumer-group <g>   Workspace group granted CAN_RUN on the Genie space via the
 #                                genie_spaces.permissions block (OBO consumers; default group: users).
@@ -69,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --no-build-frontend)     BUILD_FRONTEND=false; shift ;;
     --uc-catalog)            EXTRA_VARS+=(--var "uc_catalog=$2"); shift 2 ;;
     --uc-schema)             EXTRA_VARS+=(--var "uc_schema=$2"); shift 2 ;;
+    --lakebase-operational-schema) EXTRA_VARS+=(--var "lakebase_operational_schema=$2"); shift 2 ;;
     --sql-warehouse-id)      EXTRA_VARS+=(--var "sql_warehouse_id=$2"); shift 2 ;;
     --genie-consumer-group)  GENIE_CONSUMER_GROUP="$2"; shift 2 ;;
     --var)                   EXTRA_VARS+=(--var "$2"); shift 2 ;;
@@ -164,9 +170,26 @@ preflight() {
     if databricks catalogs get "$cat" "${PROFILE_FLAG[@]}" >/dev/null 2>&1; then
       ok "UC catalog '$cat' exists"
     else
-      warn "UC catalog '$cat' not found (or no access). Create it / pass --var uc_catalog=<your-catalog>; the seed writes there."
+      die "UC catalog '$cat' not found (or no access) in this workspace. databricks.yml's default uc_catalog is workspace-specific — pass an existing, writable catalog: --uc-catalog <name> (or --var uc_catalog=<name>). Failing here (not later) avoids burning the ~10min Lakebase-project wait first."
     fi
   fi
+
+  # Phase 3 (create_operational_tables) runs Databricks Connect LOCALLY, which requires either a
+  # cluster id or `serverless_compute_id` on the profile. Catch the missing case here — it otherwise
+  # surfaces as a raw Python traceback two phases later ("Cluster id or serverless are required but
+  # were not specified"). Not fatal (a cluster id also works, and --app-only skips this phase
+  # entirely) — warn with the exact fix.
+  local sc_id
+  sc_id=$(python3 -c "
+import configparser, os
+c = configparser.ConfigParser()
+c.read(os.path.expanduser('~/.databrickscfg'))
+print(c.get('$PROFILE', 'serverless_compute_id', fallback=''))
+" 2>/dev/null || true)
+  if [[ -z "$sc_id" ]]; then
+    warn "Profile '$PROFILE' has no serverless_compute_id — the local table-creation step (Databricks Connect) will fail unless you have a cluster_id configured instead. Fix: add 'serverless_compute_id = auto' to [$PROFILE] in ~/.databrickscfg."
+  fi
+
   warn "Seed runs on serverless compute — ensure serverless is enabled in this workspace (data-gen tasks need it)."
 
   # The two Genie+OBO steps a deploy CANNOT do (security-gated) — surface them up front.

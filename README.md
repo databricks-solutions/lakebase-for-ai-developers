@@ -43,7 +43,9 @@ Prefer to do it by hand? The same steps are spelled out below.
 
 The app is **two processes**: the FastAPI agent backend on `:8000` and the Vite/React frontend on
 `:5173` (Vite proxies `/api/*` and `/invocations` → `:8000`). The router uses
-`databricks-claude-haiku-4-5`; the planner uses `databricks-claude-opus-4-8`.
+`databricks-claude-haiku-4-5`; the planner uses `databricks-claude-opus-4-8` — `LLM_ROUTER_ENDPOINT`
+/ `LLM_PLANNER_ENDPOINT` in `.env` take either naming, classic FM API endpoints or `system.ai.*`
+AI Gateway routes.
 
 **Prerequisites** — install these before the steps below:
 
@@ -98,13 +100,21 @@ make redeploy-ui PROFILE=<p>              # FAST: frontend change → build + de
 **workspace admin** on the target workspace and a **writable UC catalog**. The Lakebase project,
 Genie space, and seed are all handled by the deploy — no manual setup steps.
 
-> **On a Databricks-managed (corp) laptop, two env gotchas bite the first deploy** — neither is
-> obvious from the error text (full list: [`docs/DEPLOYMENT_GUIDE.md` §8](docs/DEPLOYMENT_GUIDE.md#8-troubleshooting)):
+> **A few env gotchas bite the first deploy** — none obvious from the error text (full list:
+> [`docs/DEPLOYMENT_GUIDE.md` §8](docs/DEPLOYMENT_GUIDE.md#8-troubleshooting)):
 > 1. **Public PyPI is blocked** (Jamf-managed `/etc/hosts` — don't edit it). If `uv`/`make deploy`
 >    fail with `Connection refused (os error 61)`, point uv at the internal proxy first:
 >    `export UV_INDEX_URL=https://pypi-proxy.cloud.databricks.com/simple`.
 > 2. **Databricks Connect needs compute.** If you hit `Cluster id or serverless are required`, add
->    `serverless_compute_id = auto` to your `[<profile>]` in `~/.databrickscfg`.
+>    `serverless_compute_id = auto` to your `[<profile>]` in `~/.databrickscfg`. Preflight warns if
+>    it's missing.
+> 3. **`uc_catalog` doesn't exist on this workspace.** The committed default is just a starting
+>    point — preflight fails fast with `--uc-catalog <name>` (or `--var uc_catalog=<name>`) if it's
+>    not there, instead of burning the ~10min Lakebase-provisioning wait first.
+> 4. **Catalog is shared with other projects.** If seeding fails with `create-synced-table ... Table
+>    already exists pointing to a different project`, another project's Synced Tables already own
+>    `<catalog>.public.<table>` (even orphaned ones block the name). Override
+>    `VARS="lakebase_operational_schema=<unique-name>"` to a schema unique to this deployment.
 >
 > Hitting `Genie Space resources are only supported with direct deployment mode` or
 > `lineage mismatch in state files` on a workspace you've deployed to before? Those are the
@@ -120,6 +130,7 @@ The right command depends on what you're allowed to create on the workspace:
 | **Can't** create a warehouse (restricted workspace) | `make deploy PROFILE=<p> TARGET=byo VARS="sql_warehouse_id=<existing-id>"` | The `byo` target omits the warehouse resource and reuses one you already have `CAN USE` on. Everything else is identical. |
 | Want clean, non-user-prefixed names (shared demo) | add `TARGET=demo` | `mode: production` naming instead of the user-prefixed `dev` names. |
 | Bringing your own data (skip the demo seed) | add `SEED=false` | Deploys the app + infra but skips the setup-and-seed job. |
+| `uc_catalog` is shared across projects/teams | add `VARS="lakebase_operational_schema=<unique-name>"` | Synced Tables are namespaced `catalog.schema.table`; the default `public` schema can collide with another project's tables of the same name. |
 
 You can also point at your own catalog/schema inline without editing `databricks.yml`, e.g.
 `VARS="uc_catalog=main uc_schema=planner"`. Full option list: [`docs/DEPLOY.md`](docs/DEPLOY.md).

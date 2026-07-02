@@ -19,18 +19,29 @@ You should be a **workspace admin** on the target workspace. Then:
    ```bash
    databricks auth login --host https://<your-workspace>.cloud.databricks.com --profile <p>
    ```
-2. **Lakebase autoscaling project** (the agent's durable state + operational hybrid query). Create
+   Re-run this if the profile already exists but its OAuth refresh token expired (`A new access
+   token could not be retrieved because the refresh token is invalid`) — `deploy.sh` preflight
+   catches this and tells you which profile to re-auth.
+2. **`serverless_compute_id = auto`** in `[<profile>]` in `~/.databrickscfg` — phase 3
+   (`create_operational_tables`) runs Databricks Connect **locally** and needs either this or a
+   `cluster_id`. Profiles created via `databricks auth login` don't set this by default; add it by
+   hand once per profile. Preflight warns if it's missing.
+3. **Lakebase autoscaling project** (the agent's durable state + operational hybrid query). Create
    one (UI: *Compute → Lakebase*, or the `databricks-lakebase-autoscale` skill). Note its
    project id / branch / endpoint and set the `lakebase_*` variables if they differ from the
    defaults (`mfg-supply-chain-copilot` / `production` / `primary`).
-3. **A UC catalog you can write to** — set `uc_catalog`. (New catalogs can be blocked by Default
-   Storage; reuse an existing one like `main` or a sandbox catalog if so.)
-4. **Node 18+** locally (the SPA build) and `uv` (already used by the repo).
-5. *(tracing — automatic)* on the `dev`/`demo` targets the bundle **creates a small serverless SQL
+4. **A UC catalog you can write to** — set `uc_catalog`. **The committed `databricks.yml` default
+   is workspace-specific** (it targets the catalog on the workspace this demo was originally built
+   against) — on any other workspace it won't exist, and preflight now fails fast rather than
+   discovering it two phases later. Pass `--uc-catalog <name>` / `--var uc_catalog=<name>`, or reuse
+   an existing catalog like `main` if new-catalog creation is blocked by Default Storage.
+5. **Node 18+** locally (the SPA build) and `uv` (already used by the repo).
+6. *(tracing — automatic)* on the `dev`/`demo` targets the bundle **creates a small serverless SQL
    warehouse** for MLflow UC tracing + the Genie space and binds it to the app (the App SP is
    auto-granted `CAN USE`). This needs the deployer to be able to create a SQL warehouse. **If you
    can't** (restricted workspace), use the `byo` target, which omits that resource — see *Bring your
-   own warehouse* below.
+   own warehouse* below. `byo` needs an **existing SQL warehouse you have `CAN USE` on**
+   (`databricks warehouses list --profile <p>` to find one).
 
 Set non-default variables either inline (`--var uc_catalog=main`) or in a `*.tfvars`-style block;
 simplest is to edit the `default:`s in `databricks.yml` for your workspace once.
@@ -165,8 +176,15 @@ almost everyone on the first run:
   Corp laptops block public PyPI in a **Jamf-managed `/etc/hosts`** — don't edit it (it's reverted +
   it's an IT control). Use the internal proxy: `export UV_INDEX_URL=https://pypi-proxy.cloud.databricks.com/simple`
   in the same shell as `make deploy`.
+- **`UC catalog '<name>' not found (or no access)`** — you're deploying to a workspace other than
+  the one `databricks.yml`'s committed `uc_catalog` default targets. Preflight fails fast on this
+  (rather than burning the ~10min Lakebase-project-provisioning wait first): pass
+  `--uc-catalog <name>` (or `--var uc_catalog=<name>`) for a catalog you can write to on *this*
+  workspace.
 - **`Cluster id or serverless are required but were not specified`** — the local table-creation step
-  uses Databricks Connect. Add `serverless_compute_id = auto` to your `[<profile>]` in `~/.databrickscfg`.
+  uses Databricks Connect. Add `serverless_compute_id = auto` to your `[<profile>]` in
+  `~/.databrickscfg`. Preflight now warns about this proactively, but a warning isn't a hard stop
+  (a `cluster_id` also satisfies it), so it can still surface here.
 - **`Genie Space resources are only supported with direct deployment mode`** — the workspace has old
   Terraform-engine state. Migrate once: `databricks bundle deployment migrate -t <target> -p <p>
   --noplancheck` → `databricks bundle plan …` (app must be **UPDATE**, never recreate) → `make deploy`.

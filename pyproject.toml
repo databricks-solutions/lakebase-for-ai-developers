@@ -77,6 +77,16 @@ dev = [
 [tool.uv]
 default-groups = ["dev"]
 
+[tool.ruff]
+# .claude/skills/ is vendored, pinned skill content (see .claude/skills/UPSTREAM.md) — not this
+# repo's code, so it isn't linted here.
+extend-exclude = [".claude/skills"]
+
+[tool.ruff.lint.per-file-ignores]
+# These scripts run standalone (as notebooks/jobs) and need `sys.path.insert(...)` before
+# importing repo packages — the resulting E402 is intentional, not an ordering mistake.
+"data/**/*.py" = ["E402"]
+
 [tool.pytest.ini_options]
 # Integration tests (tests/integration/) talk to a live Lakebase + the agent server and are
 # SKIPPED by default — tests/conftest.py auto-skips them unless RUN_INTEGRATION=1 and Lakebase
