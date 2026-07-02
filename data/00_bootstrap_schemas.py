@@ -5,7 +5,10 @@ First task of the setup_and_seed job. Assumes `uc_catalog` already exists and is
 
   - <uc_catalog>.<uc_schema>                      operational Delta tables + Knowledge corpus
   - <uc_catalog>.<uc_schema>.<uc_volume>          Knowledge source documents (PDFs)
-  - <uc_catalog>.<mlflow_trace_schema>            MLflow 3 UC-backed trace tables (App writes here)
+
+(The MLflow UC trace schema is NOT created here — it's a declarative
+`resources.schemas.mlflow_trace_schema` bundle resource in databricks.yml, created + granted to
+the App's service principal in the same `bundle deploy` as the app itself.)
 
 All `IF NOT EXISTS`, so re-runs (and overlap with genie/01, which also creates the operational
 schema) are a no-op. Runs both ways via get_spark(): ambient on Databricks, Databricks Connect
@@ -30,9 +33,6 @@ spark = get_spark()
 catalog = settings.uc_catalog
 op_schema = settings.uc_schema
 volume = settings.uc_volume
-# Trace catalog defaults to uc_catalog (config comment); schema is its own (default mlflow_traces).
-trace_catalog = settings.mlflow_trace_catalog or settings.uc_catalog
-trace_schema = settings.mlflow_trace_schema or "mlflow_traces"
 
 # The synced operational tables (03_sync_to_lakebase) register at
 # <lakebase_uc_catalog>.<lakebase_operational_schema>.<table>; create-synced-table needs that UC
@@ -43,7 +43,6 @@ lb_schema = getattr(settings, "lakebase_operational_schema", None) or "public"
 stmts = [
     f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{op_schema}`",
     f"CREATE VOLUME IF NOT EXISTS `{catalog}`.`{op_schema}`.`{volume}`",
-    f"CREATE SCHEMA IF NOT EXISTS `{trace_catalog}`.`{trace_schema}`",
     f"CREATE SCHEMA IF NOT EXISTS `{lb_catalog}`.`{lb_schema}`",
 ]
 
@@ -53,5 +52,5 @@ for s in stmts:
 
 print(
     f"Bootstrap complete: {catalog}.{op_schema} (+ volume {volume}), "
-    f"trace schema {trace_catalog}.{trace_schema}, lakebase schema {lb_catalog}.{lb_schema}."
+    f"lakebase schema {lb_catalog}.{lb_schema}."
 )

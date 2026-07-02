@@ -31,6 +31,13 @@
 #                                unique to this deployment when uc_catalog is a shared/multi-tenant
 #                                catalog — avoids colliding with another project's synced tables of
 #                                the same name at catalog.public.<table>.
+#   --mlflow-trace-schema <name>  UC schema for MLflow's UC-backed trace tables (var
+#                                mlflow_trace_schema, default "mlflow_traces"). Override to a name
+#                                unique to this deployment when uc_catalog is a shared/multi-tenant
+#                                catalog — avoids colliding with another deployment's stale trace
+#                                tables at catalog.mlflow_traces, which blocks the Traces UI for
+#                                everyone via Unity Catalog's view-ownership-chain model even though
+#                                trace writes keep succeeding silently.
 #   --sql-warehouse-id <id>      Existing warehouse id (var sql_warehouse_id). REQUIRED for target byo.
 #   --genie-consumer-group <g>   Workspace group granted CAN_RUN on the Genie space via the
 #                                genie_spaces.permissions block (OBO consumers; default group: users).
@@ -75,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --uc-catalog)            EXTRA_VARS+=(--var "uc_catalog=$2"); shift 2 ;;
     --uc-schema)             EXTRA_VARS+=(--var "uc_schema=$2"); shift 2 ;;
     --lakebase-operational-schema) EXTRA_VARS+=(--var "lakebase_operational_schema=$2"); shift 2 ;;
+    --mlflow-trace-schema)   EXTRA_VARS+=(--var "mlflow_trace_schema=$2"); shift 2 ;;
     --sql-warehouse-id)      EXTRA_VARS+=(--var "sql_warehouse_id=$2"); shift 2 ;;
     --genie-consumer-group)  GENIE_CONSUMER_GROUP="$2"; shift 2 ;;
     --var)                   EXTRA_VARS+=(--var "$2"); shift 2 ;;
@@ -294,6 +302,7 @@ verify_and_report() {
        LAKEBASE_AUTOSCALING_ENDPOINT="$(bundle_var lakebase_endpoint)" \
        LAKEBASE_AGENT_MEMORY_SCHEMA="$(bundle_var lakebase_agent_memory_schema)" \
        LAKEBASE_WRITEBACK_SCHEMA="$(bundle_var lakebase_writeback_schema)" \
+       LAKEBASE_OPERATIONAL_SCHEMA="$(bundle_var lakebase_operational_schema)" \
        uv run python scripts/verify_deploy.py; then
       ok "verify_deploy passed"
     else

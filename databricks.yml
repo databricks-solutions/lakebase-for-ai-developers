@@ -144,10 +144,22 @@ variables:
 
   # --- MLflow 3 Unity-Catalog tracing (telemetry written by the App service principal). ---
   mlflow_trace_schema:
-    description: Schema (within uc_catalog) where MLflow writes UC-backed traces. Created by the bootstrap_schemas task.
+    # Default "mlflow_traces" (+ prefix "scp" below) collides on multi-tenant workspaces where
+    # uc_catalog is a shared catalog (e.g. `main`) that some OTHER deployment already wrote UC
+    # trace tables of the same name into — same class of bug as lakebase_operational_schema above,
+    # but worse: MLflow's UC tracing writes raw spans through a presentation VIEW
+    # (`<schema>.<prefix>_trace_unified`), and Unity Catalog's view-ownership-chain model means once
+    # that view's owner is stale/orphaned, reads through it 403 (INSUFFICIENT_PERMISSIONS) for
+    # EVERYONE — even principals with direct grants on the raw tables — while writes keep
+    # succeeding silently, so nothing looks broken until someone opens the Traces UI. The schema is
+    # now created + granted declaratively (see resources.schemas.mlflow_trace_schema below), so
+    # overriding this to a name unique to this deployment (e.g. --var
+    # mlflow_trace_schema=supply_chain_planner_traces, or deploy.sh --mlflow-trace-schema <name>)
+    # is enough to avoid the collision entirely when uc_catalog isn't exclusively yours.
+    description: Schema (within uc_catalog) where MLflow writes UC-backed traces. Must be unique per catalog if uc_catalog is shared — see comment above.
     default: mlflow_traces
   mlflow_trace_prefix:
-    description: Table-name prefix for the UC trace tables.
+    description: Table-name prefix for the UC trace tables. Part of the same collision key as mlflow_trace_schema above — override together if needed.
     default: scp
   # SQL warehouse backing UC trace storage, the seed's Genie/knowledge SQL, AND the Genie space's
   # warehouse_id. NO top-level default — it's declared PER-TARGET: dev/demo set it to their
@@ -178,9 +190,54 @@ resources:
   # existing traces. Renaming via `name:` alone keeps the same experiment_id (DABs tracks by key),
   # so it stays full of the old artifact-storage traces and the UC bind fails. Bump the key on the
   # rare occasion you must re-home tracing onto UC; the old experiment is destroyed on deploy.
+  #
+  # IMPORTANT — bumping the KEY alone is NOT sufficient if a trashed experiment with the exact
+  # same NAME already exists at this path (confirmed live 2026-07-02 on a workspace with several
+  # weeks of prior deploy history at this literal name): a soft-deleted MLflow experiment sits at
+  # `.../Trash/<name>`, and creating a new resource with the SAME `name:` string resurrects that
+  # trashed object (same experiment_id, same stale trace-location link) instead of allocating a
+  # genuinely fresh one — `bundle summary` will show the "new" key mapped to the OLD id. The `name:`
+  # itself must also change. Tying it to `${var.mlflow_trace_schema}` makes this self-correcting
+  # going forward: whenever that var is bumped to dodge a UC-schema collision (see its comment
+  # above), the experiment name changes too, so it can never collide with a previously-trashed name.
   experiments:
-    planner_experiment_uc:
-      name: /Users/${workspace.current_user.userName}/${bundle.name}-${bundle.target}-uc-traces
+    planner_experiment_uc_3:
+      name: /Users/${workspace.current_user.userName}/${bundle.name}-${bundle.target}-uc-traces-${var.mlflow_trace_schema}
+
+  # Bundle-managed MLflow UC trace schema — created AND granted to the App's service principal in
+  # ONE `bundle deploy`, no separate seed-job step. Previously this was two imperative steps
+  # (data/00_bootstrap_schemas.py's CREATE SCHEMA + data/operational/05_grant_app_sp.py's schema-
+  # level GRANT) that only ran as part of the conditional SEED=true seed job, AFTER the app already
+  # existed — fragile and skippable. The `grants.principal` below references the App's
+  # auto-generated service principal directly: DABs' `App` resource type embeds the full SDK
+  # `apps.App` struct, so `.service_principal_client_id` is a real, resolvable field (same
+  # mechanism as `.id` on experiments/genie_spaces elsewhere in this file). DABs infers deploy
+  # order from this reference — the app (+ its SP) is created first, then this schema+grant —
+  # despite being declared textually before `apps:` below. `prevent_destroy` guards trace history
+  # from a stray `bundle destroy`. See the `mlflow_trace_schema` var above for why the NAME must be
+  # unique per deployment on a shared catalog (this is what the earlier live incident traced back
+  # to: a stale, orphaned trace schema from a DIFFERENT prior deployment on the shared `main`
+  # catalog blocked reads for everyone via Unity Catalog's view-ownership-chain model, even though
+  # writes kept succeeding silently).
+  #
+  # NOTE: only the SCHEMA-level grant moved here. The CATALOG-level `USE CATALOG` grant stays in
+  # 05_grant_app_sp.py — declaring the (likely shared, multi-tenant) `uc_catalog` itself as a
+  # `resources.catalogs` entry would make DABs try to own that catalog's whole lifecycle, which is
+  # unsafe for a pre-existing catalog other teams also use. DABs has no supported "adopt existing,
+  # grant-only" mode for catalogs (see databricks/cli#4842).
+  schemas:
+    mlflow_trace_schema:
+      name: ${var.mlflow_trace_schema}
+      catalog_name: ${var.uc_catalog}
+      lifecycle:
+        prevent_destroy: true
+      grants:
+        - principal: ${resources.apps.supply_chain_planner.service_principal_client_id}
+          privileges:
+            - USE_SCHEMA
+            - CREATE_TABLE
+            - MODIFY
+            - SELECT
 
   # Bundle-created Genie space (Analytics agent). DABs creates it from the serialized definition in
   # data/genie/supply_chain.geniespace.json — generated from data/genie/genie_config.py (the single
@@ -233,7 +290,13 @@ resources:
           - name: MLFLOW_TRACE_CATALOG
             value: ${var.uc_catalog}
           - name: MLFLOW_TRACE_SCHEMA
-            value: ${var.mlflow_trace_schema}
+            # NOT ${var.mlflow_trace_schema} — on `mode: development` targets (e.g. byo), DABs
+            # prefixes the actual deployed schema NAME with the dev user (e.g.
+            # `dev_alex_miller_supply_chain_planner_traces`), but leaves the raw variable value
+            # untouched. Referencing the resource's own `.name` output (like `.id` is used
+            # elsewhere in this file for experiments/genie_spaces) always matches whatever name
+            # was actually created + granted, dev-mode-prefixed or not.
+            value: ${resources.schemas.mlflow_trace_schema.name}
           - name: MLFLOW_TRACE_TABLE_PREFIX
             value: ${var.mlflow_trace_prefix}
           - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID
@@ -311,7 +374,7 @@ resources:
       resources:
         - name: 'experiment'
           experiment:
-            experiment_id: ${resources.experiments.planner_experiment_uc.id}
+            experiment_id: ${resources.experiments.planner_experiment_uc_3.id}
             permission: 'CAN_MANAGE'
         # SQL warehouse backing UC trace storage. Binding it grants the App SP CAN_USE on the
         # warehouse AND injects its id into the env (MLFLOW_TRACING_SQL_WAREHOUSE_ID, value_from

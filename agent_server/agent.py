@@ -44,12 +44,88 @@ from agent_server.lakebase import (
 
 logger = logging.getLogger(__name__)
 
+
+def _patch_mlflow_uc_span_attribute_guard() -> None:
+    """Work around an mlflow bug that silently drops every root span's UC export.
+
+    `mlflow.tracing.processor.uc_table.DatabricksUCTableSpanProcessor.on_end()` calls
+    `_set_user_session_span_attributes()` on the root span BEFORE the actual span-export logic
+    — and that call stamps `session.id` (from our own `mlflow.update_current_trace(metadata=
+    {"mlflow.trace.session": thread_id})` below) onto the span via `mlflow.tracing.utils.
+    _bypass_attribute_guard`, a context manager meant to let mlflow write attributes onto a span
+    that's already ended.
+
+    That guard only clears `span._end_time` — the ONE check OpenTelemetry's `Span.set_attribute`
+    does itself. But OTel SDK 1.43.0's `BoundedAttributes` (the span's underlying attribute dict)
+    ALSO gets marked `_immutable=True` on `Span.end()`, independent of `_end_time`, and
+    `_bypass_attribute_guard` never touches it. So `set_attribute()` raises a bare `TypeError`
+    (empty message — logged upstream as "Failed to end span ...: ." with no detail unless DEBUG
+    logging is on), which propagates out of `_set_user_session_span_attributes` uncaught and
+    ABORTS `on_end()` before the export call ever runs. Net effect: every root span — the one that
+    makes a trace resolvable at all — silently fails to export, on every single request, with only
+    a terse WARNING to show for it. Confirmed via a monkeypatched repro against mlflow 3.14.0 /
+    opentelemetry-sdk 1.43.0 (this repo's pinned versions) and confirmed NOT fixed on mlflow's
+    current main branch (`mlflow/tracing/utils/__init__.py:_bypass_attribute_guard`) — no upstream
+    fix or tracked issue found as of 2026-07-02.
+
+    Fix: also flip `_immutable` off for the duration of the guard, mirroring what
+    `_bypass_attribute_guard` should have done. `mlflow.tracing.processor.uc_table` imports the
+    original via `from ... import _bypass_attribute_guard`, binding its OWN local reference — so
+    both the defining module and that importing module need patching for the replacement to
+    actually take effect where it's called from.
+    """
+    from contextlib import contextmanager
+
+    import mlflow.tracing.utils as _mlflow_tracing_utils
+
+    @contextmanager
+    def _fixed_bypass_attribute_guard(span):
+        original_end_time = span._end_time
+        span._end_time = None
+        attrs = span._attributes
+        was_immutable = getattr(attrs, "_immutable", False)
+        attrs._immutable = False
+        try:
+            yield
+        finally:
+            span._end_time = original_end_time
+            attrs._immutable = was_immutable
+
+    _mlflow_tracing_utils._bypass_attribute_guard = _fixed_bypass_attribute_guard
+    try:
+        import mlflow.tracing.processor.uc_table as _mlflow_uc_table
+
+        _mlflow_uc_table._bypass_attribute_guard = _fixed_bypass_attribute_guard
+    except ImportError:
+        pass  # module path changed upstream; the primary patch above still covers direct callers
+
+
+_patch_mlflow_uc_span_attribute_guard()
+
 mlflow.langchain.autolog()
 logging.getLogger("mlflow.utils.autologging_utils").setLevel(logging.ERROR)
 
 # Resolved at startup by _setup_mlflow_experiment() — used to build trace deep-links (the
 # frontend has no MLFLOW_EXPERIMENT_ID; the experiment is resolved per-user at runtime).
 _EXPERIMENT_ID: str | None = None
+
+# Set whenever tracing didn't fully wire up (schema/prefix collision, missing grant, no warehouse,
+# unsupported mlflow version, ...) so webapp._resource_cards() can tell the user WHY traces are
+# missing instead of showing a bare experiment id with no signal of trouble. Previously these
+# failures only reached a `logger.warning` — invisible unless someone was already reading app logs.
+_TRACING_DEGRADED: bool = False
+_TRACING_STATUS: str | None = None
+
+
+def _mark_tracing_degraded(message: str, exc: Exception | None = None) -> None:
+    """Loud (ERROR, not warning) + sticky: records the reason so the explorer UI can surface it."""
+    global _TRACING_DEGRADED, _TRACING_STATUS
+    _TRACING_DEGRADED = True
+    _TRACING_STATUS = message
+    if exc is not None:
+        logger.error("%s: %s", message, exc)
+    else:
+        logger.error(message)
 
 
 def _export_local_trace_credentials() -> None:
@@ -96,14 +172,20 @@ def _setup_mlflow_experiment() -> None:
                 )
                 os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = wh
             except Exception as exc:  # mlflow < 3.11, or location unsupported
-                logger.warning("UC trace location unavailable; default tracing: %s", exc)
+                _mark_tracing_degraded(
+                    "MLflow UC trace location unavailable (mlflow<3.11 or unsupported) — falling "
+                    "back to plain experiment tracing, which does not record on Databricks Apps "
+                    "(egress-blocked)", exc,
+                )
                 trace_location = None
         else:
             # Clear the sentinel/blank the bundle may have set so MLflow never sees a bogus id.
             os.environ.pop("MLFLOW_TRACING_SQL_WAREHOUSE_ID", None)
             if cat and sch:
-                logger.warning("MLflow UC tracing OFF: no SQL warehouse set (sql_warehouse_id). "
-                               "Traces (and 👍/👎 feedback) won't record on Apps until you set one.")
+                _mark_tracing_degraded(
+                    "MLflow UC tracing OFF: no SQL warehouse set (sql_warehouse_id). Traces (and "
+                    "👍/👎 feedback) won't record on Apps until you set one."
+                )
 
         if settings.mlflow_experiment_id:
             # Bind to the explicitly-configured (shared project) experiment. Attaching a UC trace
@@ -114,10 +196,16 @@ def _setup_mlflow_experiment() -> None:
                     exp = mlflow.get_experiment(settings.mlflow_experiment_id)
                     resolved = mlflow.set_experiment(experiment_name=exp.name, trace_location=trace_location)
                 except Exception as exc:  # e.g. app SP lacks USE CATALOG on the trace catalog
-                    logger.warning(
-                        "UC trace binding failed (%s); falling back to plain experiment tracing. "
-                        "Grant the App SP USE CATALOG on %s + USE SCHEMA/CREATE TABLE/MODIFY on "
-                        "%s.%s to enable UC traces.", exc, cat, cat, sch,
+                    _mark_tracing_degraded(
+                        f"UC trace binding failed for {cat}.{sch} (prefix="
+                        f"{settings.mlflow_trace_table_prefix}); falling back to plain experiment "
+                        "tracing (doesn't record on Apps). If the error mentions "
+                        "INSUFFICIENT_PERMISSIONS / 'owner of one of the underlying resources "
+                        "failed an authorization check', this is almost always a STALE trace "
+                        "schema/prefix left by a DIFFERENT prior deployment on this shared catalog "
+                        "— redeploy with a unique --mlflow-trace-schema <name>. Otherwise grant the "
+                        f"App SP USE CATALOG on {cat} + USE SCHEMA/CREATE TABLE/MODIFY on {cat}.{sch}.",
+                        exc,
                     )
                     trace_location = None
                     resolved = mlflow.set_experiment(experiment_id=settings.mlflow_experiment_id)
@@ -140,7 +228,7 @@ def _setup_mlflow_experiment() -> None:
                         cat, sch, settings.mlflow_trace_table_prefix,
                         settings.mlflow_experiment_id or "/Users/.../supply-chain-planner-uc")
     except Exception as exc:  # never let trace config crash the server
-        logger.warning("Could not set MLflow experiment; traces may not be recorded: %s", exc)
+        _mark_tracing_degraded("Could not set MLflow experiment; traces may not be recorded", exc)
 
 
 def _trace_url(trace_id: str | None) -> str | None:
