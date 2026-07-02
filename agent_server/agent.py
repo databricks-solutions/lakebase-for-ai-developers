@@ -44,6 +44,64 @@ from agent_server.lakebase import (
 
 logger = logging.getLogger(__name__)
 
+
+def _patch_mlflow_uc_span_attribute_guard() -> None:
+    """Work around an mlflow bug that silently drops every root span's UC export.
+
+    `mlflow.tracing.processor.uc_table.DatabricksUCTableSpanProcessor.on_end()` calls
+    `_set_user_session_span_attributes()` on the root span BEFORE the actual span-export logic
+    — and that call stamps `session.id` (from our own `mlflow.update_current_trace(metadata=
+    {"mlflow.trace.session": thread_id})` below) onto the span via `mlflow.tracing.utils.
+    _bypass_attribute_guard`, a context manager meant to let mlflow write attributes onto a span
+    that's already ended.
+
+    That guard only clears `span._end_time` — the ONE check OpenTelemetry's `Span.set_attribute`
+    does itself. But OTel SDK 1.43.0's `BoundedAttributes` (the span's underlying attribute dict)
+    ALSO gets marked `_immutable=True` on `Span.end()`, independent of `_end_time`, and
+    `_bypass_attribute_guard` never touches it. So `set_attribute()` raises a bare `TypeError`
+    (empty message — logged upstream as "Failed to end span ...: ." with no detail unless DEBUG
+    logging is on), which propagates out of `_set_user_session_span_attributes` uncaught and
+    ABORTS `on_end()` before the export call ever runs. Net effect: every root span — the one that
+    makes a trace resolvable at all — silently fails to export, on every single request, with only
+    a terse WARNING to show for it. Confirmed via a monkeypatched repro against mlflow 3.14.0 /
+    opentelemetry-sdk 1.43.0 (this repo's pinned versions) and confirmed NOT fixed on mlflow's
+    current main branch (`mlflow/tracing/utils/__init__.py:_bypass_attribute_guard`) — no upstream
+    fix or tracked issue found as of 2026-07-02.
+
+    Fix: also flip `_immutable` off for the duration of the guard, mirroring what
+    `_bypass_attribute_guard` should have done. `mlflow.tracing.processor.uc_table` imports the
+    original via `from ... import _bypass_attribute_guard`, binding its OWN local reference — so
+    both the defining module and that importing module need patching for the replacement to
+    actually take effect where it's called from.
+    """
+    from contextlib import contextmanager
+
+    import mlflow.tracing.utils as _mlflow_tracing_utils
+
+    @contextmanager
+    def _fixed_bypass_attribute_guard(span):
+        original_end_time = span._end_time
+        span._end_time = None
+        attrs = span._attributes
+        was_immutable = getattr(attrs, "_immutable", False)
+        attrs._immutable = False
+        try:
+            yield
+        finally:
+            span._end_time = original_end_time
+            attrs._immutable = was_immutable
+
+    _mlflow_tracing_utils._bypass_attribute_guard = _fixed_bypass_attribute_guard
+    try:
+        import mlflow.tracing.processor.uc_table as _mlflow_uc_table
+
+        _mlflow_uc_table._bypass_attribute_guard = _fixed_bypass_attribute_guard
+    except ImportError:
+        pass  # module path changed upstream; the primary patch above still covers direct callers
+
+
+_patch_mlflow_uc_span_attribute_guard()
+
 mlflow.langchain.autolog()
 logging.getLogger("mlflow.utils.autologging_utils").setLevel(logging.ERROR)
 
