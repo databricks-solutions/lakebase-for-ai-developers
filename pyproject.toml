@@ -67,7 +67,7 @@ dev = [
     "hatchling>=1.28.0",
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.6.0",
+    "ruff>=0.15.20",
     # Local Spark via Databricks Connect (get_spark() in data/_spark.py). DEV-ONLY: never install
     # on Databricks — it conflicts with the runtime pyspark. Databricks Connect must match your
     # workspace DBR major.minor — change this floor/cap to YOUR DBR (e.g. "==15.4.*" for DBR 15.4).
