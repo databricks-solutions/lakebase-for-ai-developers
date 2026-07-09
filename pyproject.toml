@@ -44,7 +44,7 @@ dependencies = [
 
 [build-system]
 requires = ["hatchling"]
-build-backend = "hatchling.build"
+build-backend = "hatchling*"
 
 # The app wheel ships `agent_server` only. The `data/` package is dev/setup tooling (Spark
 # data-gen run as jobs) and must NOT land in the app wheel — `databricks-connect` conflicts with
@@ -64,7 +64,7 @@ agent-evaluate = "agent_server.evaluation.cli:main"
 
 [dependency-groups]
 dev = [
-    "hatchling>=1.28.0",
+    "hatchling>=1.31.0",
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.6.0",
