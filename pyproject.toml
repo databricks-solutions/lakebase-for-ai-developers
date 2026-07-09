@@ -30,7 +30,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0.0",
     "pgvector>=0.3.0",
     # --- Synthetic data gen ---
-    "dbldatagen>=0.4.0",
+    "dbldatagen>=0.4.0.post1",
     "faker>=30.0.0",
     # --- Knowledge agent: PDF parsing + chunking + VS client ---
     "pypdf>=5.0.0",
