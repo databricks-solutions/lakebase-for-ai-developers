@@ -86,6 +86,9 @@ extend-exclude = [".claude/skills"]
 # These scripts run standalone (as notebooks/jobs) and need `sys.path.insert(...)` before
 # importing repo packages — the resulting E402 is intentional, not an ordering mistake.
 "data/**/*.py" = ["E402"]
+# Same E402 reason as above, plus F704: these are Databricks notebooks meant to run in the
+# workspace notebook UI (or Jupyter), where top-level `await` is valid — not a plain script.
+"notebooks/**/*.py" = ["E402", "F704"]
 
 [tool.pytest.ini_options]
 # Integration tests (tests/integration/) talk to a live Lakebase + the agent server and are
