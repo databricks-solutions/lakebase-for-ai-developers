@@ -34,21 +34,32 @@ import sys
 from pathlib import Path
 
 try:
-    REPO_ROOT = str(Path(__file__).resolve().parents[1])
+    _start = Path(__file__).resolve().parent
 except NameError:
-    REPO_ROOT = str(Path.cwd().resolve())
+    _start = Path.cwd().resolve()  # notebook UI: no __file__; cwd is this notebook's own dir
+REPO_ROOT = str(next((p for p in (_start, *_start.parents) if (p / "pyproject.toml").exists()), _start))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from agent_server.config import settings
+
 try:
     from databricks.sdk.runtime import dbutils
-    dbutils.widgets.text("GENIE_SPACE_ID", "", "Genie space id")
-    dbutils.widgets.text("VECTOR_SEARCH_INDEX", "", "Vector Search index (catalog.schema.index)")
+    dbutils.widgets.text("GENIE_SPACE_ID", settings.genie_space_id, "Genie space id")
+    dbutils.widgets.text(
+        "VECTOR_SEARCH_INDEX", settings.vector_search_index, "Vector Search index (catalog.schema.index)"
+    )
+    GENIE_SPACE_ID = dbutils.widgets.get("GENIE_SPACE_ID")
+    VECTOR_SEARCH_INDEX = dbutils.widgets.get("VECTOR_SEARCH_INDEX")
 except Exception:
-    pass  # no notebook context (e.g. local `python file.py`) — .env / defaults apply instead
+    GENIE_SPACE_ID = None
+    VECTOR_SEARCH_INDEX = None  # no notebook context (e.g. local `python file.py`) — .env / defaults apply instead
 
 # COMMAND ----------
-from agent_server.config import settings  # picks up the widgets above
+if GENIE_SPACE_ID:
+    settings.genie_space_id = GENIE_SPACE_ID
+if VECTOR_SEARCH_INDEX:
+    settings.vector_search_index = VECTOR_SEARCH_INDEX
 
 print(f"Genie space id       : {settings.genie_space_id or '(not set — the Genie cell below will note this)'}")
 print(f"Vector Search index  : {settings.vector_search_index or settings.default_index_name}")

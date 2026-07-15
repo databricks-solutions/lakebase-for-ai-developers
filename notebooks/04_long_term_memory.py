@@ -23,21 +23,32 @@ import sys
 from pathlib import Path
 
 try:
-    REPO_ROOT = str(Path(__file__).resolve().parents[1])
+    _start = Path(__file__).resolve().parent
 except NameError:
-    REPO_ROOT = str(Path.cwd().resolve())
+    _start = Path.cwd().resolve()  # notebook UI: no __file__; cwd is this notebook's own dir
+REPO_ROOT = str(next((p for p in (_start, *_start.parents) if (p / "pyproject.toml").exists()), _start))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from agent_server.config import settings
+
 try:
     from databricks.sdk.runtime import dbutils
-    dbutils.widgets.text("LAKEBASE_AUTOSCALING_PROJECT", "", "Lakebase project (optional)")
-    dbutils.widgets.text("LAKEBASE_AUTOSCALING_BRANCH", "", "Lakebase branch (optional)")
+    dbutils.widgets.text(
+        "LAKEBASE_AUTOSCALING_PROJECT", settings.lakebase_autoscaling_project or "", "Lakebase project (optional)"
+    )
+    dbutils.widgets.text(
+        "LAKEBASE_AUTOSCALING_BRANCH", settings.lakebase_autoscaling_branch or "", "Lakebase branch (optional)"
+    )
     dbutils.widgets.text("user_id", "notebook-tour@databricks.com", "Your user id (must match notebook 03)")
     dbutils.widgets.text("memory_schema_override", "notebook_tour_memory", "Isolated memory schema (must match notebook 03)")
+    LAKEBASE_AUTOSCALING_PROJECT = dbutils.widgets.get("LAKEBASE_AUTOSCALING_PROJECT")
+    LAKEBASE_AUTOSCALING_BRANCH = dbutils.widgets.get("LAKEBASE_AUTOSCALING_BRANCH")
     user_id = dbutils.widgets.get("user_id")
     memory_schema_override = dbutils.widgets.get("memory_schema_override")
 except Exception:
+    LAKEBASE_AUTOSCALING_PROJECT = None
+    LAKEBASE_AUTOSCALING_BRANCH = None
     user_id = "notebook-tour@databricks.com"
     memory_schema_override = "notebook_tour_memory"
 
@@ -52,10 +63,14 @@ import mlflow
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
-from agent_server.config import settings  # picks up the widgets above
 from agent_server.contracts import HITLDecision, HITLVerdict
 from agent_server.graph.build_graph import build_graph
 from agent_server.lakebase import init_lakebase_config, lakebase_context
+
+if LAKEBASE_AUTOSCALING_PROJECT:
+    settings.lakebase_autoscaling_project = LAKEBASE_AUTOSCALING_PROJECT
+if LAKEBASE_AUTOSCALING_BRANCH:
+    settings.lakebase_autoscaling_branch = LAKEBASE_AUTOSCALING_BRANCH
 
 mlflow.langchain.autolog()
 print(f"UC catalog/schema: {settings.uc_catalog}.{settings.uc_schema} (same tables as notebooks 01-02)")

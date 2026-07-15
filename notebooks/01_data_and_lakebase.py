@@ -11,37 +11,88 @@
 
 # COMMAND ----------
 # MAGIC %md
+# MAGIC ### Install psycopg (serverless compute only)
+# MAGIC Serverless compute doesn't ship `psycopg` — the `connect()` calls in Layers 2-3 need it.
+# MAGIC Install once per session, then restart Python so the import picks it up. Skip this cell on
+# MAGIC a classic cluster that already has it, or running locally (`uv sync` already installed it).
+
+# COMMAND ----------
+# MAGIC %pip install psycopg "databricks-sdk>=0.118.0" "databricks-ai-bridge[agent-server]" databricks-langchain
+# MAGIC %restart_python
+
+# COMMAND ----------
+# MAGIC %md
 # MAGIC ### Configure this notebook
 # MAGIC Change a value, then **Run ▸ Clear State and Run All** (settings resolve once per session).
-# MAGIC Leave the Lakebase widgets blank if `LAKEBASE_AUTOSCALING_PROJECT`/`BRANCH` are already set on
-# MAGIC your cluster or `.env`.
+# MAGIC `LAKEBASE_AUTOSCALING_ENDPOINT` is required — `connect()` has no other way to find your
+# MAGIC Lakebase project on a fresh cluster/serverless session (no `.env` there). Leave
+# MAGIC `PROJECT`/`BRANCH` blank only if the endpoint value is already a full
+# MAGIC `projects/<p>/branches/<b>/endpoints/<id>` path; otherwise set all three.
 
 # COMMAND ----------
 import sys
 from pathlib import Path
 
 try:
-    REPO_ROOT = str(Path(__file__).resolve().parents[1])
+    _start = Path(__file__).resolve().parent
 except NameError:
-    REPO_ROOT = str(Path.cwd().resolve())
+    _start = Path.cwd().resolve()  # notebook UI: no __file__; cwd is this notebook's own dir
+REPO_ROOT = str(next((p for p in (_start, *_start.parents) if (p / "pyproject.toml").exists()), _start))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from agent_server.config import settings
+
 try:
-    from databricks.sdk.runtime import dbutils
-    dbutils.widgets.text("UC_CATALOG", "supply_chain", "UC Catalog")
-    dbutils.widgets.text("UC_SCHEMA", "planner", "UC Schema")
-    dbutils.widgets.text("LAKEBASE_OPERATIONAL_SCHEMA", "public", "Lakebase operational schema")
-    dbutils.widgets.text("LAKEBASE_AUTOSCALING_PROJECT", "", "Lakebase project (optional)")
-    dbutils.widgets.text("LAKEBASE_AUTOSCALING_BRANCH", "", "Lakebase branch (optional)")
+    from databricks.sdk.runtime import dbutils, display
+    dbutils.widgets.text("UC_CATALOG", settings.uc_catalog, "UC Catalog")
+    dbutils.widgets.text("UC_SCHEMA", settings.uc_schema, "UC Schema")
+    dbutils.widgets.text("LAKEBASE_OPERATIONAL_SCHEMA", settings.lakebase_operational_schema, "Lakebase operational schema")
+    dbutils.widgets.text("LAKEBASE_AUTOSCALING_ENDPOINT", settings.lakebase_autoscaling_endpoint or "", "Lakebase endpoint (id or full path)")
+    dbutils.widgets.text("LAKEBASE_AUTOSCALING_PROJECT", settings.lakebase_autoscaling_project or "", "Lakebase project (optional)")
+    dbutils.widgets.text("LAKEBASE_AUTOSCALING_BRANCH", settings.lakebase_autoscaling_branch or "", "Lakebase branch (optional)")
+    UC_CATALOG = dbutils.widgets.get("UC_CATALOG")
+    UC_SCHEMA = dbutils.widgets.get("UC_SCHEMA")
+    LAKEBASE_OPERATIONAL_SCHEMA = dbutils.widgets.get("LAKEBASE_OPERATIONAL_SCHEMA")
+    LAKEBASE_AUTOSCALING_ENDPOINT = dbutils.widgets.get("LAKEBASE_AUTOSCALING_ENDPOINT")
+    LAKEBASE_AUTOSCALING_PROJECT = dbutils.widgets.get("LAKEBASE_AUTOSCALING_PROJECT")
+    LAKEBASE_AUTOSCALING_BRANCH = dbutils.widgets.get("LAKEBASE_AUTOSCALING_BRANCH")
 except Exception:
-    pass  # no notebook context (e.g. local `python file.py`) — .env / defaults apply instead
+    # no notebook context (e.g. local `python file.py`) — .env / defaults apply instead
+    UC_CATALOG = UC_SCHEMA = LAKEBASE_OPERATIONAL_SCHEMA = None
+    LAKEBASE_AUTOSCALING_ENDPOINT = None
+    LAKEBASE_AUTOSCALING_PROJECT = LAKEBASE_AUTOSCALING_BRANCH = None
+    display = None
 
 # COMMAND ----------
-from agent_server.config import settings  # picks up the widgets above
 from data._spark import get_spark
 from data.operational import seeds
 from data.operational._lakebase import connect
+
+if UC_CATALOG:
+    settings.uc_catalog = UC_CATALOG
+if UC_SCHEMA:
+    settings.uc_schema = UC_SCHEMA
+if LAKEBASE_OPERATIONAL_SCHEMA:
+    settings.lakebase_operational_schema = LAKEBASE_OPERATIONAL_SCHEMA
+if LAKEBASE_AUTOSCALING_ENDPOINT:
+    settings.lakebase_autoscaling_endpoint = LAKEBASE_AUTOSCALING_ENDPOINT
+if LAKEBASE_AUTOSCALING_PROJECT:
+    settings.lakebase_autoscaling_project = LAKEBASE_AUTOSCALING_PROJECT
+if LAKEBASE_AUTOSCALING_BRANCH:
+    settings.lakebase_autoscaling_branch = LAKEBASE_AUTOSCALING_BRANCH
+
+
+def show_rows(cur, label: str) -> None:
+    """Render a cursor's last result set: a table via notebook `display()`, or a plain print
+    outside a notebook (local `python file.py`, no `display` in scope)."""
+    rows = cur.fetchall()
+    if display:
+        import pandas as pd
+        display(pd.DataFrame(rows, columns=[c.name for c in cur.description]))
+    else:
+        print(f"{label}:", rows)
+
 
 spark = get_spark()
 print(f"UC catalog/schema        : {settings.uc_catalog}.{settings.uc_schema}")
@@ -103,13 +154,13 @@ print(
 with connect() as conn, conn.cursor() as cur:
     schema = settings.lakebase_operational_schema
     cur.execute(f"SELECT sku, on_hand_qty FROM {schema}.inventory_current WHERE sku = %s", (seeds.HERO_SKU,))
-    print(f"Postgres {schema}.inventory_current:", cur.fetchall())
+    show_rows(cur, f"Postgres {schema}.inventory_current")
 
     cur.execute(
         f"SELECT supplier_id, sku, open_po_qty FROM {schema}.open_pos WHERE sku = %s ORDER BY supplier_id",
         (seeds.HERO_SKU,),
     )
-    print(f"Postgres {schema}.open_pos:", cur.fetchall())
+    show_rows(cur, f"Postgres {schema}.open_pos")
 
 # COMMAND ----------
 # MAGIC %md
@@ -126,6 +177,8 @@ with connect() as conn, conn.cursor() as cur:
     schema = settings.lakebase_operational_schema
     cur.execute(f"SELECT count(*) FROM {schema}.quality_incidents WHERE expired_at IS NULL")
     active_count = cur.fetchone()[0]
+    print(f"{active_count} active quality incidents in {schema}.quality_incidents.")
+
     cur.execute(
         f"""
         SELECT incident_id, supplier_id, sku, category, severity, summary
@@ -135,12 +188,7 @@ with connect() as conn, conn.cursor() as cur:
         """,
         (seeds.HERO_SUPPLIER_ID, seeds.HERO_SKU),
     )
-    rows = cur.fetchall()
-
-print(f"{active_count} active quality incidents in {schema}.quality_incidents.")
-print("A few on the hero supplier/SKU:")
-for row in rows:
-    print(f"  {row}")
+    show_rows(cur, f"A few on {seeds.HERO_SUPPLIER_ID}/{seeds.HERO_SKU}")
 
 # COMMAND ----------
 # MAGIC %md

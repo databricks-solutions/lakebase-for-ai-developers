@@ -2,16 +2,10 @@
 # MAGIC %md
 # MAGIC # 00 — Welcome: Meet the Supply-Chain Planner Copilot
 # MAGIC
-# MAGIC This is a five-notebook guided tour of a multi-agent Supply-Chain Planner Copilot — a
+# MAGIC A five-notebook guided tour of a multi-agent Supply-Chain Planner Copilot — a
 # MAGIC production-shaped reference build for **stateful agents on Databricks with Lakebase**. Every
-# MAGIC notebook in this tour calls the same functions the deployed app uses; nothing here is a
-# MAGIC simplified reimplementation.
-# MAGIC
-# MAGIC One note before diving in: the storyboard behind this demo (`docs/storyboard.md`) frames its
-# MAGIC buying persona as **ML / AI Platform Engineers who build production agents** — and explicitly
-# MAGIC excludes notebook-based Data Scientists. This tour is a notebook anyway, on purpose: it's the
-# MAGIC "pop the hood" artifact for that production-agent audience, not a return to notebook-driven
-# MAGIC data science.
+# MAGIC notebook calls the same functions the deployed app uses; nothing here is a simplified
+# MAGIC reimplementation.
 # MAGIC
 # MAGIC ## The hero scenario
 # MAGIC
@@ -93,22 +87,32 @@ import sys
 from pathlib import Path
 
 try:
-    REPO_ROOT = str(Path(__file__).resolve().parents[1])
+    _start = Path(__file__).resolve().parent
 except NameError:
-    REPO_ROOT = str(Path.cwd().resolve())
+    _start = Path.cwd().resolve()  # notebook UI: no __file__; cwd is this notebook's own dir
+REPO_ROOT = str(next((p for p in (_start, *_start.parents) if (p / "pyproject.toml").exists()), _start))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from agent_server.config import settings
+
 try:
     from databricks.sdk.runtime import dbutils
-    dbutils.widgets.text("UC_CATALOG", "supply_chain", "UC Catalog")
-    dbutils.widgets.text("UC_SCHEMA", "planner", "UC Schema")
+    dbutils.widgets.text("UC_CATALOG", settings.uc_catalog, "UC Catalog")
+    dbutils.widgets.text("UC_SCHEMA", settings.uc_schema, "UC Schema")
+    UC_CATALOG = dbutils.widgets.get("UC_CATALOG")
+    UC_SCHEMA = dbutils.widgets.get("UC_SCHEMA")
 except Exception:
-    pass  # no notebook context (e.g. local `python file.py`) — .env / defaults apply instead
+    UC_CATALOG = None
+    UC_SCHEMA = None  # no notebook context (e.g. local `python file.py`) — .env / defaults apply instead
 
 # COMMAND ----------
-from agent_server.config import settings  # picks up the widgets above
 from data.operational import seeds
+
+if UC_CATALOG:
+    settings.uc_catalog = UC_CATALOG
+if UC_SCHEMA:
+    settings.uc_schema = UC_SCHEMA
 
 print(f"UC catalog             : {settings.uc_catalog}")
 print(f"UC schema               : {settings.uc_schema}")
