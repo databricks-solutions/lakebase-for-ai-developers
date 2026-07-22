@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { deleteSession, getMe, getSessionMessages, listSessions, resumeMessage, streamMessage, upsertSession } from "./api";
+import { AboutPanel } from "./components/AboutPanel";
 import { BlobBg } from "./components/BlobBg";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExplorerDrawer } from "./components/ExplorerDrawer";
@@ -11,7 +12,7 @@ import { TourProvider } from "./tour/TourProvider";
 import { TourButton } from "./tour/TourButton";
 import type { ChatMessage, Me, ResumeDecisions, Session } from "./types";
 
-export type Page = "chat" | "review" | "lakebase";
+export type Page = "chat" | "review" | "lakebase" | "about";
 
 const newThreadId = () =>
   (crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
@@ -242,6 +243,7 @@ export default function App() {
             {page === "lakebase" && (
               <LakebasePanel thread={thread} workspaceHost={me?.workspace_host} refreshKey={committedAt} />
             )}
+            {page === "about" && <AboutPanel />}
           </div>
         </main>
         <ExplorerDrawer open={explorerOpen} onClose={() => setExplorerOpen(false)} />
