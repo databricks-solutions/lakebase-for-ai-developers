@@ -1,11 +1,12 @@
 import type { CSSProperties } from "react";
-import { Database, MessageSquare, ShieldCheck } from "lucide-react";
+import { Database, Info, MessageSquare, ShieldCheck } from "lucide-react";
 import type { Page } from "../App";
 
 const NAV: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: "chat", label: "Chat", icon: <MessageSquare size={15} /> },
   { id: "review", label: "Review", icon: <ShieldCheck size={15} /> },
   { id: "lakebase", label: "Lakebase", icon: <Database size={15} /> },
+  { id: "about", label: "About", icon: <Info size={15} /> },
 ];
 
 /**
