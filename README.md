@@ -5,6 +5,8 @@ A multi-agent **Supply-Chain Planner Copilot** for manufacturing planners — a 
 state lives on **Lakebase** (Postgres), and retrieval spans Genie, Mosaic AI Vector Search, and
 Lakebase pgvector — with human-in-the-loop approval and end-to-end MLflow tracing.
 
+[Use this deck](https://docs.google.com/presentation/d/1RQlKxt7LBplcY4RxngTsdc5Kgs7-E8SAI80oeC1OIuA/edit?slide=id.obj_502548c33f69#slide=id.obj_502548c33f69)
+
 ![Agentic Apps Architecture](docs/diagrams/Agentic_Apps_Architecture.001.png)
 
 **What it does.** A planner asks a question; a supervisor routes it to the right engine, the
