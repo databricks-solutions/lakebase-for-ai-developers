@@ -237,6 +237,11 @@ export function AboutPanel() {
           sees the same governed data. In production that would be Postgres row-level security keyed on
           the caller's identity — not an app-side ACL.
         </div>
+
+        {/* Owners */}
+        <div style={ownersLine}>
+          <b>Owners:</b> Alex Miller, Chandhana Padmanabhan, Kylie Taylor, Ram Vegiraju
+        </div>
       </div>
     </div>
   );
@@ -360,6 +365,15 @@ const archIcon: CSSProperties = {
   border: "1px solid var(--border)",
   color: "var(--db-lava-600)",
   flexShrink: 0,
+};
+const ownersLine: CSSProperties = {
+  marginTop: 28,
+  paddingTop: 16,
+  borderTop: "1px solid var(--border)",
+  fontSize: 18,
+  letterSpacing: "-0.02em",
+  color: "var(--fg-1)",
+  lineHeight: 1.55,
 };
 const noteBox: CSSProperties = {
   marginTop: 16,
