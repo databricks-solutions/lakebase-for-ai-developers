@@ -83,10 +83,18 @@ def test_app_env_includes_writeback_schema():
 
 
 def test_app_env_still_pins_operational_schema_to_public():
-    # The move splits write-back off `public` but the synced READ path still reads `public`.
-    app = _app(_bundle())
+    # The move splits write-back off `public` but the synced READ path still reads `public` by
+    # default. The env now wires to the `lakebase_operational_schema` var (per-target overridable
+    # on shared catalogs) rather than a hard-coded literal, so assert the wiring + that its default
+    # is still `public`.
+    bundle = _bundle()
+    app = _app(bundle)
     env = {e["name"]: e.get("value") for e in app["config"]["env"] if isinstance(e, dict)}
-    assert env.get("LAKEBASE_OPERATIONAL_SCHEMA") == "public"
+    assert env.get("LAKEBASE_OPERATIONAL_SCHEMA") == "${var.lakebase_operational_schema}"
+    var = bundle.get("variables", {}).get("lakebase_operational_schema", {})
+    assert var.get("default") == "public", (
+        "the operational read path must still default to `public` (synced tables land there)"
+    )
 
 
 # ── (3) grant_app_sp seed task depends on sync_to_lakebase ─────────────────────────────────────
