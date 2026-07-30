@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Install the externally-managed Claude Code skill sets at PINNED versions.
+# Install the externally-managed coding-agent skill sets at PINNED versions.
 #
-# The vendored agent-langgraph-advanced build skills already live in .claude/skills/ (committed).
+# The repo-local agent-langgraph-advanced build skills already live in `.agents/skills/` for Codex
+# and `.claude/skills/` for Claude Code (committed).
 # This script installs the two skill sets we reference rather than vendor:
 #   1) Databricks Agent Skills  (requires Databricks CLI >= v1.0.0)
 #   2) MLflow Skills            (tracing + evaluation)
@@ -38,4 +39,4 @@ databricks aitools install
 echo "==> Installing MLflow Skills (tracing + evaluation)"
 npx skills add mlflow/skills
 
-echo "==> Done. See .claude/skills/README.md and docs/references.md."
+echo "==> Done. See .agents/skills/README.md, .claude/skills/README.md, and docs/references.md."

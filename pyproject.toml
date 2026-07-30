@@ -81,9 +81,8 @@ dev = [
 default-groups = ["dev"]
 
 [tool.ruff]
-# .claude/skills/ is vendored, pinned skill content (see .claude/skills/UPSTREAM.md) — not this
-# repo's code, so it isn't linted here.
-extend-exclude = [".claude/skills"]
+# Agent skills are pinned/ported workflow content, not application code, so they are not linted.
+extend-exclude = [".claude/skills", ".agents/skills"]
 
 [tool.ruff.lint.per-file-ignores]
 # These scripts run standalone (as notebooks/jobs) and need `sys.path.insert(...)` before
