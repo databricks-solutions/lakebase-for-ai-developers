@@ -67,7 +67,10 @@ dev = [
     "hatchling>=1.28.0",
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.6.0",
+    # Capped below 0.16: uv.lock is intentionally not tracked (see .gitignore), so `uv sync`
+    # resolves fresh each run and would otherwise float to the newest ruff. 0.16 enabled new lint
+    # rules (UP035/UP045/UP017/RUF022/…) that fail on existing code; cap until we adopt those.
+    "ruff>=0.6.0,<0.16",
     # Local Spark via Databricks Connect (get_spark() in data/_spark.py). DEV-ONLY: never install
     # on Databricks — it conflicts with the runtime pyspark. Databricks Connect must match your
     # workspace DBR major.minor — change this floor/cap to YOUR DBR (e.g. "==15.4.*" for DBR 15.4).

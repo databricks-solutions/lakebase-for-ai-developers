@@ -27,6 +27,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+        # uv.lock is intentionally untracked (see .gitignore), so this resolves from pyproject.toml
+        # version constraints. Toolchain floors/caps (e.g. ruff) are pinned there to stay reproducible.
         run: uv sync
 
       - name: Lint (ruff)
