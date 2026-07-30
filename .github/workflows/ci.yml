@@ -27,7 +27,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: uv sync
+        # --frozen: install exactly what uv.lock pins (e.g. ruff), so CI uses the same toolchain
+        # as local dev instead of floating to the newest release on the mirror.
+        run: uv sync --frozen
 
       - name: Lint (ruff)
         run: uv run ruff check .
