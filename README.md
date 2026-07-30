@@ -21,8 +21,9 @@ resumable MLflow trace, durable across the pause via the Lakebase checkpoint.
   (`AsyncDatabricksStore`: approvals, preferences, supplier notes), all on Lakebase.
 - **App** — React/Vite chat UI with a Backend Explorer drawer and 👍/👎 feedback logged to the trace.
 
-> New to the project? Read **[`CLAUDE.md`](CLAUDE.md)** first — it's the keystone for architecture,
-> the Lakebase-pgvector vs. Vector-Search decision, the state/memory model, and conventions.
+> New to the project? Read **[`AGENTS.md`](AGENTS.md)** in Codex or
+> **[`CLAUDE.md`](CLAUDE.md)** in Claude Code. Each is a standalone guide to the architecture,
+> Lakebase-pgvector vs. Vector-Search decision, state/memory model, and conventions.
 
 ## Set up with Claude Code (fastest)
 
@@ -36,6 +37,10 @@ It'll check prerequisites, run `databricks auth login`, `uv sync`, and the front
 `.env`, and start both processes. To ship it, ask:
 
 > **Deploy this to my Databricks workspace** (profile `<p>`)**.**
+
+Codex users can open the same repository directly. Codex auto-loads the standalone
+[`AGENTS.md`](AGENTS.md) and complete Codex-native skill ports in
+[`.agents/skills/`](.agents/skills/). Ask the same setup or deploy prompts above.
 
 Prefer to do it by hand? The same steps are spelled out below.
 
@@ -80,7 +85,8 @@ Then open **http://localhost:5173**.
   `http://localhost:8000/ui` (the backend serves the built SPA). Two terminals is better while
   iterating on agent code (hot reload).
 
-See [`CLAUDE.md` → Running locally vs. on Databricks](CLAUDE.md#running-locally-vs-on-databricks-auth--config)
+See [`AGENTS.md` → Running locally vs. on Databricks](AGENTS.md#running-locally-vs-on-databricks-auth--config)
+or the equivalent [`CLAUDE.md` section](CLAUDE.md#running-locally-vs-on-databricks-auth--config)
 for the auth model (local profile vs. ambient credentials on Databricks).
 
 ## Deploy to Databricks
@@ -176,7 +182,8 @@ gather engines, HITL, checkpoint durability, and long-term memory.
 
 | Path | What |
 |---|---|
-| [`CLAUDE.md`](CLAUDE.md) | Shared context — read first |
+| [`AGENTS.md`](AGENTS.md) | Standalone Codex project context and working rules |
+| [`CLAUDE.md`](CLAUDE.md) | Standalone Claude Code project context and working rules |
 | [`.env.example`](.env.example) | Local config template (`cp` → `.env`) |
 | [`pyproject.toml`](pyproject.toml) | Dependency contract (`uv sync`) + the `start-server` entrypoint |
 | [`databricks.yml`](databricks.yml) | DABs bundle — App, Lakebase, Genie space, experiment, seed job, `dev`/`demo` targets |
@@ -184,7 +191,8 @@ gather engines, HITL, checkpoint durability, and long-term memory.
 | [`agent_server/`](agent_server/) | FastAPI server, agent (`@invoke`/`@stream`), web routes, config, the `graph/` (supervisor + gather + planner + gate + HITL + commit), `tools/`, long-term `memory.py`, `evaluation/` flywheel |
 | [`data/`](data/) | Synthetic operational data, the pgvector hybrid query, the Knowledge VS pipeline, and the Genie schema + space creation |
 | [`frontend/`](frontend/) | React + Vite chat UI (dev on `:5173`; built SPA served at `/ui`) |
-| [`.claude/skills/`](.claude/skills/) | Vendored, pinned build + Databricks + MLflow skills |
+| [`.agents/skills/`](.agents/skills/) | Complete Codex-native build + Databricks + MLflow skill ports |
+| [`.claude/skills/`](.claude/skills/) | Vendored, pinned Claude Code skills |
 
 ## Docs
 
