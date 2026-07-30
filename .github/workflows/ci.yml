@@ -27,9 +27,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        # --frozen: install exactly what uv.lock pins (e.g. ruff), so CI uses the same toolchain
-        # as local dev instead of floating to the newest release on the mirror.
-        run: uv sync --frozen
+        # uv.lock is intentionally untracked (see .gitignore), so this resolves from pyproject.toml
+        # version constraints. Toolchain floors/caps (e.g. ruff) are pinned there to stay reproducible.
+        run: uv sync
 
       - name: Lint (ruff)
         run: uv run ruff check .
