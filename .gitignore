@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# macOS metadata
+.DS_Store
+
 # C extensions
 *.so
 
@@ -206,6 +209,10 @@ cython_debug/
 #   and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
+# Local editor and agent configuration
+.isaac/config.json
+.vscode/settings.json
+
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
