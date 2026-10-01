@@ -1,0 +1,23 @@
+command:
+- uv
+- run
+- start-server
+env:
+- name: MLFLOW_TRACKING_URI
+  value: databricks
+- name: MLFLOW_EXPERIMENT_ID
+  value: '4423756957066607'
+- name: AGENT_MEMORY_STORE
+  value: mason-scp-01-jmpivr-memory
+- name: AGENT_SESSION_STORE
+  value: mason-scp-01-jmpivr-sessions
+- name: DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT
+  value: projects/agent-mason-mason-scp-01-runtime-store/branches/production/endpoints/primary
+- name: DATABRICKS_MASON_RUNTIME_STORE_SCHEMA
+  value: databricks_mason_runtime_fd3198639442
+- name: PIP_INDEX_URL
+  value: https://pypi.org/simple/
+- name: UV_INDEX_URL
+  value: https://pypi.org/simple/
+- name: UV_DEFAULT_INDEX
+  value: https://pypi.org/simple/

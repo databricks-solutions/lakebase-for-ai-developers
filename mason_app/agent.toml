@@ -1,0 +1,18 @@
+schema_version = 1
+
+[agent]
+framework = "langgraph"
+server = "mason"
+deployment_name = "supply-mason-cp"
+
+[memory_store]
+name = "mason-scp-01-jmpivr-memory"
+
+[session_store]
+name = "mason-scp-01-jmpivr-sessions"
+[[tools]]
+id = "genie_agent"
+source = {kind = "genie_agent", space_id = "01f1bd160eae120f8a84f887c624286c"}
+
+[tracing]
+experiment_id = "4423756957066607"
